@@ -1,0 +1,21 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+
+# Go
+coverage.out
+vendor/
+
+# Local tooling
+.venv-pdf/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Proxy / local state
+*.db
+*.db-shm
+*.db-wal
