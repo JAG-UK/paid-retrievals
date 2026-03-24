@@ -107,4 +107,6 @@ type QuoteResponse struct {
 	DealUUID string `json:"deal_uuid"`
 	CID      string `json:"cid"`
 	PriceFIL string `json:"price_fil"`
+	// Payee0x is the FVM address the client should fund / open a native-FIL Filecoin Pay rail to (SP / service wallet).
+	Payee0x string `json:"payee_0x,omitempty"`
 }

@@ -9,14 +9,14 @@ import (
 func TestCanonicalMessageStable(t *testing.T) {
 	h := &PaymentHeader{
 		DealUUID:      "d1",
-		ClientAddress: "f1client",
+		ClientAddress: "0x1111111111111111111111111111111111111111",
 		CID:           "bafy123",
 		Method:        "GET",
 		Path:          "/piece/bafy123",
 		Host:          "example.com",
 		Nonce:         "n1",
 		ExpiresUnix:   1700000000,
-		SigType:       "lotus",
+		SigType:       SigTypeEVM,
 		Signature:     "abc",
 	}
 	m1 := string(h.CanonicalMessage())
@@ -29,14 +29,14 @@ func TestCanonicalMessageStable(t *testing.T) {
 func TestEncodeDecodeRoundTrip(t *testing.T) {
 	h := &PaymentHeader{
 		DealUUID:      "d1",
-		ClientAddress: "f1client",
+		ClientAddress: "0x1111111111111111111111111111111111111111",
 		CID:           "bafy123",
 		Method:        "GET",
 		Path:          "/piece/bafy123",
 		Host:          "example.com",
 		Nonce:         "n1",
 		ExpiresUnix:   time.Now().Add(time.Minute).Unix(),
-		SigType:       "lotus",
+		SigType:       SigTypeEVM,
 		Signature:     "abc",
 	}
 	raw, err := h.EncodeHTTP()
@@ -55,14 +55,14 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 func TestValidateAtExpired(t *testing.T) {
 	h := &PaymentHeader{
 		DealUUID:      "d1",
-		ClientAddress: "f1client",
+		ClientAddress: "0x1111111111111111111111111111111111111111",
 		CID:           "bafy123",
 		Method:        "GET",
 		Path:          "/piece/bafy123",
 		Host:          "example.com",
 		Nonce:         "n1",
 		ExpiresUnix:   time.Now().Add(-time.Second).Unix(),
-		SigType:       "lotus",
+		SigType:       SigTypeEVM,
 		Signature:     "abc",
 	}
 	if err := h.ValidateAt(time.Now()); err == nil {

@@ -18,6 +18,7 @@ type Deal struct {
 	Client     string
 	CID        string
 	PriceFIL   string
+	Payee0x    string
 	CreatedAt  int64
 	PaidAt     int64
 	PaidSeen   int
@@ -52,6 +53,7 @@ func (s *Store) migrate() error {
 			client TEXT NOT NULL,
 			cid TEXT NOT NULL,
 			price_fil TEXT NOT NULL,
+			payee_0x TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
 			last_quoted_at INTEGER NOT NULL,
 			last_paid_at INTEGER,
@@ -73,28 +75,35 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
+	// additive column for DBs created before payee_0x existed
+	if _, err := s.db.Exec(`ALTER TABLE deals ADD COLUMN payee_0x TEXT NOT NULL DEFAULT ''`); err != nil {
+		low := strings.ToLower(err.Error())
+		if !strings.Contains(low, "duplicate column") && !strings.Contains(low, "already exists") {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
 	return nil
 }
 
 var ErrReplayNonce = errors.New("nonce already used")
 
-func (s *Store) InsertQuote(ctx context.Context, dealUUID, client, cid, priceFIL string) error {
+func (s *Store) InsertQuote(ctx context.Context, dealUUID, client, cid, priceFIL, payee0x string) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO deals(deal_uuid, client, cid, price_fil, created_at, last_quoted_at, quoted_seen)
-		VALUES(?,?,?,?,?,?,1)
-	`, dealUUID, client, cid, priceFIL, now, now)
+		INSERT INTO deals(deal_uuid, client, cid, price_fil, payee_0x, created_at, last_quoted_at, quoted_seen)
+		VALUES(?,?,?,?,?,?,?,1)
+	`, dealUUID, client, cid, priceFIL, payee0x, now, now)
 	return err
 }
 
 func (s *Store) GetDeal(ctx context.Context, dealUUID string) (*Deal, error) {
 	var d Deal
 	err := s.db.QueryRowContext(ctx, `
-		SELECT deal_uuid, client, cid, price_fil, created_at,
+		SELECT deal_uuid, client, cid, price_fil, COALESCE(payee_0x, ''), created_at,
 		       COALESCE(last_paid_at, 0), COALESCE(paid_seen, 0), COALESCE(quoted_seen, 0)
 		FROM deals WHERE deal_uuid = ?
 	`, dealUUID).Scan(
-		&d.DealUUID, &d.Client, &d.CID, &d.PriceFIL, &d.CreatedAt,
+		&d.DealUUID, &d.Client, &d.CID, &d.PriceFIL, &d.Payee0x, &d.CreatedAt,
 		&d.PaidAt, &d.PaidSeen, &d.QuotedSeen,
 	)
 	if err == sql.ErrNoRows {

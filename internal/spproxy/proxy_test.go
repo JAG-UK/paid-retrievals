@@ -1,8 +1,10 @@
 package spproxy
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,17 +13,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/google/uuid"
+
 	"github.com/fidlabs/paid-retrievals/internal/x402"
 )
 
-type mockVerifier struct{ ok bool }
-
-func (m mockVerifier) Verify(clientAddr string, msg []byte, signature string) error {
-	if m.ok {
-		return nil
-	}
-	return os.ErrPermission
-}
+const testQuotePayee0x = "0x2222222222222222222222222222222222222222"
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -33,15 +32,50 @@ func newTestStore(t *testing.T) *Store {
 	return s
 }
 
+func mustHostFromURL(t *testing.T, raw string) string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Host
+}
+
+type mockPaySettler struct {
+	called int
+}
+
+func (m *mockPaySettler) SettleIfFunded(ctx context.Context, payer, payee common.Address, priceWei *big.Int) (string, error) {
+	m.called++
+	if payer == (common.Address{}) || payee == (common.Address{}) {
+		return "", os.ErrInvalid
+	}
+	if priceWei.Sign() <= 0 {
+		return "", os.ErrInvalid
+	}
+	return "0xsettle", nil
+}
+
 func TestQuoteThenPaidSuccess(t *testing.T) {
 	s := newTestStore(t)
 	defer s.Close()
-	h := NewHandler(Config{PriceFIL: "0.1", Verifier: mockVerifier{ok: true}}, s)
+
+	pk, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := crypto.PubkeyToAddress(pk.PublicKey).Hex()
+	mock := &mockPaySettler{}
+	h := NewHandler(Config{
+		PriceFIL:     "0.1",
+		FilecoinPay:  mock,
+		QuotePayee0x: testQuotePayee0x,
+	}, s)
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
-	client := "f1abc"
-	quoteReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/bafyquote?client="+client, nil)
+	cid := "bafyquote"
+	quoteReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/"+cid+"?client="+client, nil)
 	quoteRes, err := http.DefaultClient.Do(quoteReq)
 	if err != nil {
 		t.Fatal(err)
@@ -59,17 +93,21 @@ func TestQuoteThenPaidSuccess(t *testing.T) {
 	hdr := &x402.PaymentHeader{
 		DealUUID:      payload.X402.DealUUID,
 		ClientAddress: client,
-		CID:           "bafyquote",
+		CID:           cid,
 		Method:        http.MethodGet,
-		Path:          "/piece/bafyquote",
+		Path:          "/piece/" + cid,
 		Host:          mustHostFromURL(t, ts.URL),
 		Nonce:         "n-1",
 		ExpiresUnix:   time.Now().Add(time.Minute).Unix(),
-		SigType:       "lotus",
-		Signature:     "sig",
 	}
+	st, sig, err := x402.SignEVM(pk, hdr.CanonicalMessage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr.SigType = st
+	hdr.Signature = sig
 	raw, _ := hdr.EncodeHTTP()
-	paidReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/bafyquote", nil)
+	paidReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/"+cid, nil)
 	paidReq.Header.Set(x402.HeaderName, raw)
 	paidRes, err := http.DefaultClient.Do(paidReq)
 	if err != nil {
@@ -79,16 +117,29 @@ func TestQuoteThenPaidSuccess(t *testing.T) {
 	if paidRes.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 got %d", paidRes.StatusCode)
 	}
+	if mock.called != 1 {
+		t.Fatalf("expected settle called once, got %d", mock.called)
+	}
 }
 
 func TestTamperedCIDRejected(t *testing.T) {
 	s := newTestStore(t)
 	defer s.Close()
-	h := NewHandler(Config{PriceFIL: "0.1", Verifier: mockVerifier{ok: true}}, s)
+
+	pk, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := crypto.PubkeyToAddress(pk.PublicKey).Hex()
+	mock := &mockPaySettler{}
+	h := NewHandler(Config{
+		PriceFIL:     "0.1",
+		FilecoinPay:  mock,
+		QuotePayee0x: testQuotePayee0x,
+	}, s)
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
-	client := "f1abc"
 	qres, err := http.Get(ts.URL + "/piece/bafyone1?client=" + client)
 	if err != nil {
 		t.Fatal(err)
@@ -108,8 +159,8 @@ func TestTamperedCIDRejected(t *testing.T) {
 		"host":         mustHostFromURL(t, ts.URL),
 		"nonce":        "n-2",
 		"expires_unix": time.Now().Add(time.Minute).Unix(),
-		"sig_type":     "lotus",
-		"sig":          "sig",
+		"sig_type":     x402.SigTypeEVM,
+		"sig":          "00",
 	}
 	b, _ := json.Marshal(hdr)
 	raw := base64.StdEncoding.EncodeToString(b)
@@ -129,11 +180,21 @@ func TestTamperedCIDRejected(t *testing.T) {
 func TestReplayNonceRejected(t *testing.T) {
 	s := newTestStore(t)
 	defer s.Close()
-	h := NewHandler(Config{PriceFIL: "0.1", Verifier: mockVerifier{ok: true}}, s)
+
+	pk, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := crypto.PubkeyToAddress(pk.PublicKey).Hex()
+	mock := &mockPaySettler{}
+	h := NewHandler(Config{
+		PriceFIL:     "0.1",
+		FilecoinPay:  mock,
+		QuotePayee0x: testQuotePayee0x,
+	}, s)
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
-	client := "f1abc"
 	qres, err := http.Get(ts.URL + "/piece/bafyrepl1?client=" + client)
 	if err != nil {
 		t.Fatal(err)
@@ -153,9 +214,13 @@ func TestReplayNonceRejected(t *testing.T) {
 		Host:          mustHostFromURL(t, ts.URL),
 		Nonce:         "same-nonce",
 		ExpiresUnix:   time.Now().Add(time.Minute).Unix(),
-		SigType:       "lotus",
-		Signature:     "sig",
 	}
+	st, sig, err := x402.SignEVM(pk, hdr.CanonicalMessage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr.SigType = st
+	hdr.Signature = sig
 	raw, _ := hdr.EncodeHTTP()
 
 	req1, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/bafyrepl1", nil)
@@ -181,11 +246,63 @@ func TestReplayNonceRejected(t *testing.T) {
 	}
 }
 
-func mustHostFromURL(t *testing.T, raw string) string {
-	t.Helper()
-	u, err := url.Parse(raw)
+func TestFilecoinPayEVMSettleBeforeServe(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	pk, err := crypto.GenerateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return u.Host
+	client := crypto.PubkeyToAddress(pk.PublicKey).Hex()
+	dealID := uuid.NewString()
+	cid := "bafyfpayevm1"
+	if err := s.InsertQuote(context.Background(), dealID, client, cid, "0.01", testQuotePayee0x); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockPaySettler{}
+	h := NewHandler(Config{
+		PriceFIL:     "0.01",
+		FilecoinPay:  mock,
+		QuotePayee0x: testQuotePayee0x,
+	}, s)
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	piecePath := "/piece/" + cid
+	hdr := &x402.PaymentHeader{
+		DealUUID:      dealID,
+		ClientAddress: client,
+		CID:           cid,
+		Method:        http.MethodGet,
+		Path:          piecePath,
+		Host:          mustHostFromURL(t, ts.URL),
+		Nonce:         "n-filpay",
+		ExpiresUnix:   time.Now().Add(time.Minute).Unix(),
+	}
+	st, sig, err := x402.SignEVM(pk, hdr.CanonicalMessage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr.SigType = st
+	hdr.Signature = sig
+	raw, err := hdr.EncodeHTTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+piecePath, nil)
+	req.Header.Set(x402.HeaderName, raw)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 got %d", res.StatusCode)
+	}
+	if mock.called != 1 {
+		t.Fatalf("expected settle called once, got %d", mock.called)
+	}
 }
