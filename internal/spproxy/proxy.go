@@ -1,7 +1,6 @@
 package spproxy
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,7 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/fidlabs/paid-retrievals/internal/paymentheader"
 	"github.com/fidlabs/paid-retrievals/internal/x402"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 var cidPattern = regexp.MustCompile(`^[a-zA-Z0-9._:-]{8,256}$`)
@@ -24,13 +25,13 @@ type Config struct {
 	ClientHeader  string
 	MaxHeaderSize int
 	MaxClockSkew  time.Duration
-	VerifyBinary  string
-	Verifier      SignatureVerifier
 	Logger        *slog.Logger
-}
 
-type SignatureVerifier interface {
-	Verify(clientAddr string, msg []byte, signature string) error
+	// FilecoinPay (native FIL) is required: quotes include payee_0x; paid downloads require EVM-signed x402 + on-chain settleRail.
+	FilecoinPay  FilecoinPaySettler
+	QuotePayee0x string
+	// PayDebug emits extra Info-level logs for Filecoin Pay (HTTP + use with filpay --pay-debug on settler).
+	PayDebug bool
 }
 
 func NewHandler(cfg Config, store *Store) http.Handler {
@@ -48,6 +49,13 @@ func NewHandler(cfg Config, store *Store) http.Handler {
 	}
 	if cfg.MaxClockSkew <= 0 {
 		cfg.MaxClockSkew = 30 * time.Second
+	}
+	if cfg.FilecoinPay == nil {
+		panic("spproxy: Config.FilecoinPay is required")
+	}
+	payee := strings.TrimSpace(cfg.QuotePayee0x)
+	if payee == "" || !common.IsHexAddress(payee) {
+		panic("spproxy: Config.QuotePayee0x must be a non-empty 0x FVM address")
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -101,15 +109,25 @@ func parsePiecePath(path string) (string, bool) {
 
 func handleQuote(w http.ResponseWriter, r *http.Request, store *Store, cfg Config, cid string, logger *slog.Logger) {
 	client := identifyClient(r, cfg)
+	if !common.IsHexAddress(strings.TrimSpace(client)) {
+		logger.Warn("bad request: client must be 0x FVM address", "client", client)
+		http.Error(w, "bad request: client must be a 0x FVM address", http.StatusBadRequest)
+		return
+	}
 	dealID := uuid.NewString()
-	if err := store.InsertQuote(r.Context(), dealID, client, cid, cfg.PriceFIL); err != nil {
+	payee := strings.TrimSpace(cfg.QuotePayee0x)
+	if err := store.InsertQuote(r.Context(), dealID, client, cid, cfg.PriceFIL, payee); err != nil {
 		logger.Error("failed to insert quote", "error", err, "deal_uuid", dealID, "client", client, "cid", cid)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	logger.Info("quote created", "deal_uuid", dealID, "client", client, "cid", cid, "price_fil", cfg.PriceFIL)
+	if cfg.PayDebug {
+		logger.Info("filecoin pay quote", "scope", "filpay-http", "deal_uuid", dealID, "client_0x", client,
+			"cid", cid, "price_fil", cfg.PriceFIL, "payee_0x", payee, "filecoin_pay", true)
+	}
 
-	resp := x402.QuoteResponse{DealUUID: dealID, CID: cid, PriceFIL: cfg.PriceFIL}
+	resp := x402.QuoteResponse{DealUUID: dealID, CID: cid, PriceFIL: cfg.PriceFIL, Payee0x: payee}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusPaymentRequired)
@@ -159,7 +177,7 @@ func handlePaid(w http.ResponseWriter, r *http.Request, store *Store, cfg Config
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	if !secureEqual(hdr.ClientAddress, deal.Client) {
+	if !sameHexAddress(hdr.ClientAddress, deal.Client) {
 		logger.Warn("forbidden: client mismatch", "deal_uuid", hdr.DealUUID, "header_client", hdr.ClientAddress, "deal_client", deal.Client)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -174,15 +192,45 @@ func handlePaid(w http.ResponseWriter, r *http.Request, store *Store, cfg Config
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	verifier := cfg.Verifier
-	if verifier == nil {
-		verifier = x402.LotusVerifier{Binary: cfg.VerifyBinary}
+	if !strings.EqualFold(strings.TrimSpace(hdr.SigType), x402.SigTypeEVM) {
+		logger.Warn("forbidden: x402 signatures must be evm (secp256k1 / 0x client)", "deal_uuid", hdr.DealUUID, "sig_type", hdr.SigType)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
 	}
+	verifier := x402.EVMVerifier{}
 	if err := verifier.Verify(hdr.ClientAddress, hdr.CanonicalMessage(), hdr.Signature); err != nil {
 		logger.Warn("forbidden: signature verify failed", "deal_uuid", hdr.DealUUID, "client", hdr.ClientAddress, "error", err)
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if cfg.PayDebug {
+		logger.Info("filecoin pay x402 signature ok", "scope", "filpay-http", "deal_uuid", hdr.DealUUID,
+			"sig_type", hdr.SigType, "client_0x", hdr.ClientAddress, "cid", cid)
+	}
+	if strings.TrimSpace(deal.Payee0x) == "" || !common.IsHexAddress(strings.TrimSpace(deal.Payee0x)) {
+		logger.Error("internal: deal missing payee_0x", "deal_uuid", deal.DealUUID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	priceWei, err := paymentheader.ParseFILToWei(deal.PriceFIL)
+	if err != nil {
+		logger.Error("internal: bad price_fil on deal", "deal_uuid", deal.DealUUID, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	payer := common.HexToAddress(strings.TrimSpace(deal.Client))
+	payeeAddr := common.HexToAddress(strings.TrimSpace(deal.Payee0x))
+	if cfg.PayDebug {
+		logger.Info("filecoin pay calling SettleIfFunded", "scope", "filpay-http", "deal_uuid", hdr.DealUUID,
+			"payer", payer.Hex(), "payee", payeeAddr.Hex(), "price_wei", priceWei.String(), "price_fil", deal.PriceFIL)
+	}
+	txHash, err := cfg.FilecoinPay.SettleIfFunded(r.Context(), payer, payeeAddr, priceWei)
+	if err != nil {
+		logger.Warn("payment required: filecoin pay settle failed", "deal_uuid", hdr.DealUUID, "error", err)
+		http.Error(w, "payment required: filecoin pay rail or balance not satisfied", http.StatusPaymentRequired)
+		return
+	}
+	logger.Info("filecoin pay rail settled", "deal_uuid", deal.DealUUID, "settle_tx", txHash, "payer", payer.Hex(), "payee", payeeAddr.Hex())
 	if err := store.ConsumeNonce(r.Context(), deal.DealUUID, hdr.Nonce, hdr.ExpiresUnix); err != nil {
 		if err == ErrReplayNonce {
 			logger.Warn("forbidden: replay nonce", "deal_uuid", deal.DealUUID, "nonce", hdr.Nonce)
@@ -244,15 +292,6 @@ func sanitizeClient(v string) string {
 			return -1
 		}
 	}, v)
-}
-
-func secureEqual(a, b string) bool {
-	ab := []byte(a)
-	bb := []byte(b)
-	if len(ab) != len(bb) {
-		return false
-	}
-	return bytes.Equal(ab, bb)
 }
 
 func hostMatches(hdrHost, reqHost string) bool {
