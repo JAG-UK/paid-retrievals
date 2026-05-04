@@ -9,6 +9,9 @@ vendor/
 
 # Local tooling
 .venv-pdf/
+*.db
+*.key
+*.car
 
 # IDE
 .idea/
