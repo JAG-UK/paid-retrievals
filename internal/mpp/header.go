@@ -35,12 +35,12 @@ type PaymentRequest struct {
 }
 
 type Challenge struct {
-	ID      string
-	Realm   string
-	Method  string
-	Intent  string
-	Request PaymentRequest
-	Expires string
+	ID          string
+	Realm       string
+	Method      string
+	Intent      string
+	Request     PaymentRequest
+	Expires     string
 	Description string
 	Opaque      map[string]string
 	Digest      string
@@ -68,12 +68,12 @@ type Credential struct {
 }
 
 type ChallengeFields struct {
-	ID      string `json:"id"`
-	Realm   string `json:"realm"`
-	Method  string `json:"method"`
-	Intent  string `json:"intent"`
-	Request string `json:"request"`
-	Expires string `json:"expires,omitempty"`
+	ID          string `json:"id"`
+	Realm       string `json:"realm"`
+	Method      string `json:"method"`
+	Intent      string `json:"intent"`
+	Request     string `json:"request"`
+	Expires     string `json:"expires,omitempty"`
 	Description string `json:"description,omitempty"`
 	Opaque      string `json:"opaque,omitempty"`
 	Digest      string `json:"digest,omitempty"`
@@ -176,13 +176,13 @@ func ParseWWWAuthenticate(v string) (*Challenge, error) {
 		return nil, err
 	}
 	ch := &Challenge{
-		ID:      params["id"],
-		Realm:   params["realm"],
-		Method:  params["method"],
-		Intent:  params["intent"],
-		Expires: params["expires"],
+		ID:          params["id"],
+		Realm:       params["realm"],
+		Method:      params["method"],
+		Intent:      params["intent"],
+		Expires:     params["expires"],
 		Description: params["description"],
-		Digest: params["digest"],
+		Digest:      params["digest"],
 	}
 	reqB64 := params["request"]
 	if ch.ID == "" || ch.Realm == "" || ch.Method == "" || ch.Intent == "" || reqB64 == "" {
@@ -292,12 +292,12 @@ func BuildCredential(ch Challenge, payload ProofPayload, source string) (Credent
 	}
 	return Credential{
 		Challenge: ChallengeFields{
-			ID:      ch.ID,
-			Realm:   ch.Realm,
-			Method:  ch.Method,
-			Intent:  ch.Intent,
-			Request: reqB64,
-			Expires: ch.Expires,
+			ID:          ch.ID,
+			Realm:       ch.Realm,
+			Method:      ch.Method,
+			Intent:      ch.Intent,
+			Request:     reqB64,
+			Expires:     ch.Expires,
 			Description: ch.Description,
 			Opaque:      opaqueB64,
 			Digest:      ch.Digest,

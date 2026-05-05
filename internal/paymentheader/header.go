@@ -36,13 +36,13 @@ type PaymentHeader struct {
 	AmountWei     string   `json:"amount_wei"` // decimal string; matches on-chain uint256
 	DeadlineUnix  int64    `json:"deadline_unix"`
 	ClientAddress string   `json:"client"` // 0x-prefixed hex checksummed EVM address (skeleton)
-	Signature     string   `json:"sig"`      // 0x-prefixed hex: sign(keccak256(canonical))
+	Signature     string   `json:"sig"`    // 0x-prefixed hex: sign(keccak256(canonical))
 }
 
 var (
-	ErrInvalidHeader   = errors.New("invalid payment header")
+	ErrInvalidHeader     = errors.New("invalid payment header")
 	ErrSignatureMismatch = errors.New("signature does not match client address")
-	ErrExpired         = errors.New("payment header expired")
+	ErrExpired           = errors.New("payment header expired")
 )
 
 // CanonicalHash returns keccak256 over a deterministic encoding of the fields

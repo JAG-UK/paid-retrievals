@@ -165,7 +165,10 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 			for _, it := range items {
 				prices = append(prices, it.PriceFIL)
 			}
-			total := sumFILValues(prices)
+			total, err := sumFILValues(prices)
+			if err != nil {
+				return fmt.Errorf("sum FIL values: %w", err)
+			}
 			fmt.Printf("Total required amount: %s FIL for %d piece(s).\n", total, len(items))
 
 			var filpayLogger *slog.Logger
@@ -781,14 +784,17 @@ func getenv(key, fallback string) string {
 	return v
 }
 
-func sumFILValues(prices []string) string {
+func sumFILValues(prices []string) (string, error) {
 	var total float64
 	for _, price := range prices {
 		var x float64
-		fmt.Sscanf(price, "%f", &x)
+		_, err := fmt.Sscanf(price, "%f", &x)
+		if err != nil {
+			return "0", fmt.Errorf("parse FIL value %q: %w", price, err)
+		}
 		total += x
 	}
-	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", total), "0"), ".")
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", total), "0"), "."), nil
 }
 
 func sanitizeFilename(v string) string {

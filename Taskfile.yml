@@ -1,0 +1,111 @@
+version: "3"
+
+vars:
+  LOCAL_ROOT: .task
+  LOCAL_BIN: .task/bin
+  LOCAL_GOPATH: .task/gopath
+  LOCAL_GOCACHE: .task/gocache
+  LOCAL_GOMODCACHE: .task/gomodcache
+  GOLANGCI_LINT_VERSION: latest
+  GOVULNCHECK_VERSION: latest
+
+env:
+  GOBIN: "{{.TASKFILE_DIR}}/{{.LOCAL_BIN}}"
+  GOPATH: "{{.TASKFILE_DIR}}/{{.LOCAL_GOPATH}}"
+  GOCACHE: "{{.TASKFILE_DIR}}/{{.LOCAL_GOCACHE}}"
+  GOMODCACHE: "{{.TASKFILE_DIR}}/{{.LOCAL_GOMODCACHE}}"
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  fmt:
+    desc: Format all Go files
+    cmds:
+      - gofmt -w cmd internal
+
+  fmt:check:
+    desc: Check Go formatting
+    cmds:
+      - |
+        unformatted="$(gofmt -l cmd internal)"
+        if [ -n "${unformatted}" ]; then
+          echo "The following files are not gofmt-formatted:"
+          echo "${unformatted}"
+          exit 1
+        fi
+
+  tidy:
+    desc: Tidy Go module dependencies
+    deps:
+      - bootstrap
+    cmds:
+      - go mod tidy
+
+  vet:
+    desc: Run go vet checks
+    deps:
+      - bootstrap
+    cmds:
+      - go vet ./...
+
+  test:
+    desc: Run unit tests
+    deps:
+      - bootstrap
+    cmds:
+      - go test ./...
+
+  lint:
+    desc: Run golangci-lint
+    deps:
+      - tools
+    cmds:
+      - "{{.LOCAL_BIN}}/golangci-lint run"
+
+  build:
+    desc: Build project binaries
+    deps:
+      - bootstrap
+    cmds:
+      - mkdir -p bin
+      - go build -o bin/ ./cmd/retrieval-client ./cmd/sp-proxy
+
+  vuln:
+    desc: Run vulnerability checks
+    deps:
+      - tools
+    cmds:
+      - "{{.LOCAL_BIN}}/govulncheck ./..."
+
+  ci:
+    desc: Run local CI checks
+    cmds:
+      - task fmt:check
+      - task vet
+      - task test
+      - task lint
+      - task build
+      - task vuln
+
+  bootstrap:
+    desc: Create local directories for a self-contained toolchain cache
+    cmds:
+      - mkdir -p "{{.LOCAL_BIN}}" "{{.LOCAL_GOPATH}}" "{{.LOCAL_GOCACHE}}" "{{.LOCAL_GOMODCACHE}}"
+
+  tools:
+    desc: Install required developer tools locally under .task/bin
+    run: once
+    deps:
+      - bootstrap
+    cmds:
+      - go install github.com/golangci/golangci-lint/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
+      - go install golang.org/x/vuln/cmd/govulncheck@{{.GOVULNCHECK_VERSION}}
+
+  clean:
+    desc: Remove build outputs
+    cmds:
+      - rm -rf bin "{{.LOCAL_ROOT}}"

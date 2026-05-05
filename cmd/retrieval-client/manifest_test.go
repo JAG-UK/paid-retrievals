@@ -44,4 +44,3 @@ func TestExtractPieceCIDsFromManifestInvalidJSON(t *testing.T) {
 		t.Fatalf("expected error")
 	}
 }
-
