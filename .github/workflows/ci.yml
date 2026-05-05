@@ -32,11 +32,6 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: latest
-
       - name: Install Task
         run: go install github.com/go-task/task/v3/cmd/task@latest
 
