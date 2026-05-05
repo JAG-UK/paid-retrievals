@@ -114,6 +114,12 @@ PY
 
 > Keep key files out of git. Add `*.key` (or your chosen names) to `.gitignore`.
 
+## Fund your wallets with FIL
+
+In order to procure paid retrievals both the client wallet and service provider wallet must exist and the client wallet will need to be funded with FIL tokens.
+
+For testing on calibration network you can create and fund each wallet at https://beryx.io/faucet (your wallet address can be seen in the console messages from the client and storage provider if a retrieval is attempted without both wallets existing and sufficient funds being available).
+
 ## Run the SP proxy
 
 Minimal example:
@@ -146,7 +152,7 @@ Useful flags:
 ```bash
 ./bin/retrieval-client fetch \
   --filpay-private-key-file ./client.key \
-  --rpc-url "https://api.calibration.node.glif.io/rpc/v1" \
+  --pay-rpc-url "https://api.calibration.node.glif.io/rpc/v1" \
   --cid baga6ea4seaq...
   --cid baga6ea7dk3b...
 ```
@@ -169,7 +175,7 @@ If you want to ignore discovered endpoints and only probe one base URL (eg your 
 ```bash
 ./bin/retrieval-client fetch \
   --filpay-private-key-file ./client.key \
-  --rpc-url "https://api.calibration.node.glif.io/rpc/v1" \
+  --pay-rpc-url "https://api.calibration.node.glif.io/rpc/v1" \
   --sp-base-url "http://127.0.0.1:8787" \
   --cid baga6ea4seaq...
 ```
