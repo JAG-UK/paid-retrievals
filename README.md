@@ -118,7 +118,7 @@ PY
 
 In order to procure paid retrievals both the client wallet and service provider wallet must exist and the client wallet will need to be funded with FIL tokens.
 
-For testing on testnet you can create and fund each wallet at https://beryx.io/faucet (your wallet address can be seen in the console messages from the client and storage provider if a retrieval is attempted without both wallets existing and sufficient funds being available).
+For testing on calibration network you can create and fund each wallet at https://beryx.io/faucet (your wallet address can be seen in the console messages from the client and storage provider if a retrieval is attempted without both wallets existing and sufficient funds being available).
 
 ## Run the SP proxy
 
