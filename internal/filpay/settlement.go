@@ -85,14 +85,14 @@ const withdrawABIJSON = `[
 
 // Client performs Filecoin Pay reads and settlement txs for native FIL (token address 0x0).
 type Client struct {
-	eth            *ethclient.Client
-	payments       *contracts.PaymentsContract
-	chainID        *big.Int
-	signerKey      *ecdsa.PrivateKey
-	signerAddr     common.Address
-	paymentsAddr   common.Address
-	log            *slog.Logger
-	payTrace       bool // Info-level step logs (--pay-debug); independent of global log level
+	eth          *ethclient.Client
+	payments     *contracts.PaymentsContract
+	chainID      *big.Int
+	signerKey    *ecdsa.PrivateKey
+	signerAddr   common.Address
+	paymentsAddr common.Address
+	log          *slog.Logger
+	payTrace     bool // Info-level step logs (--pay-debug); independent of global log level
 }
 
 type OperatorApprovalStatus struct {

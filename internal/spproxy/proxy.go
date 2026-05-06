@@ -12,12 +12,13 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/fidlabs/paid-retrievals/internal/mpp"
 	"github.com/fidlabs/paid-retrievals/internal/paymentheader"
-	"github.com/ethereum/go-ethereum/common"
 )
 
 var cidPattern = regexp.MustCompile(`^[a-zA-Z0-9._:-]{8,256}$`)
+
 const problemBase = "https://paymentauth.org/problems/"
 
 type problemDetail struct {
@@ -135,10 +136,10 @@ func handleQuote(w http.ResponseWriter, r *http.Request, store *Store, cfg Confi
 			"cid", cid, "price_fil", cfg.PriceFIL, "payee_0x", payee, "filecoin_pay", true)
 	}
 	challenge := mpp.Challenge{
-		ID:     dealID,
-		Realm:  mpp.RealmPrefix + r.Host,
-		Method: mpp.MethodID,
-		Intent: mpp.IntentID,
+		ID:          dealID,
+		Realm:       mpp.RealmPrefix + r.Host,
+		Method:      mpp.MethodID,
+		Intent:      mpp.IntentID,
 		Description: "Filecoin piece retrieval charge",
 		Opaque: map[string]string{
 			"deal_uuid": dealID,
@@ -167,10 +168,10 @@ func issueChallengeForDeal(w http.ResponseWriter, r *http.Request, deal *Deal, l
 		return
 	}
 	challenge := mpp.Challenge{
-		ID:     deal.DealUUID,
-		Realm:  mpp.RealmPrefix + r.Host,
-		Method: mpp.MethodID,
-		Intent: mpp.IntentID,
+		ID:          deal.DealUUID,
+		Realm:       mpp.RealmPrefix + r.Host,
+		Method:      mpp.MethodID,
+		Intent:      mpp.IntentID,
 		Description: "Filecoin piece retrieval charge",
 		Opaque: map[string]string{
 			"deal_uuid": deal.DealUUID,
