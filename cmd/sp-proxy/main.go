@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/fidlabs/paid-retrievals/internal/filpay"
-	"github.com/fidlabs/paid-retrievals/internal/mpp"
 	piecepayment "github.com/fidlabs/paid-retrievals/internal/piecepayment"
 	"github.com/fidlabs/paid-retrievals/internal/sqlitestore"
 )
@@ -97,7 +96,6 @@ func root() *cobra.Command {
 					return
 				}
 				body := dummyCAR(authCtx.CID, authCtx.DealUUID)
-				_ = mpp.WritePaymentReceipt(w.Header(), mpp.MethodID, authCtx.TxHash, time.Now())
 				w.Header().Set("Content-Type", "application/vnd.ipld.car")
 				w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.car\"", authCtx.CID))
 				w.Header().Set("Cache-Control", "no-store")

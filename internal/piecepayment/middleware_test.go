@@ -53,7 +53,6 @@ func newTestHandler(cfg pp.ServiceConfig) http.Handler {
 			return
 		}
 		body := []byte("DUMMY-CAR\nCID=" + authCtx.CID + "\nDEAL=" + authCtx.DealUUID + "\n")
-		_ = mpp.WritePaymentReceipt(w.Header(), mpp.MethodID, authCtx.TxHash, time.Now())
 		w.Header().Set("Content-Type", "application/vnd.ipld.car")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)

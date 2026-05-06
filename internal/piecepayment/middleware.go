@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/fidlabs/paid-retrievals/internal/mpp"
 )
@@ -79,9 +80,47 @@ func (svc *RetrievalService) PiecePaymentMiddleware(MaxHeaderSize int) func(http
 				CID:      outcome.CID,
 				TxHash:   outcome.TxHash,
 			})
-			next.ServeHTTP(w, r.WithContext(ctx))
+			next.ServeHTTP(newReceiptResponseWriter(w, logger, outcome.Deal.DealUUID, outcome.TxHash), r.WithContext(ctx))
 		})
 	}
+}
+
+type receiptResponseWriter struct {
+	w          http.ResponseWriter
+	logger     *slog.Logger
+	dealUUID   string
+	txHash     string
+	wroteHeader bool
+}
+
+func newReceiptResponseWriter(w http.ResponseWriter, logger *slog.Logger, dealUUID, txHash string) *receiptResponseWriter {
+	return &receiptResponseWriter{w: w, logger: logger, dealUUID: dealUUID, txHash: txHash}
+}
+
+func (w *receiptResponseWriter) Header() http.Header {
+	return w.w.Header()
+}
+
+func (w *receiptResponseWriter) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.w.Write(p)
+}
+
+func (w *receiptResponseWriter) WriteHeader(statusCode int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+
+	if statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices {
+		if err := mpp.WritePaymentReceipt(w.w.Header(), mpp.MethodID, w.txHash, time.Now()); err != nil {
+			w.logger.Error("failed to write payment receipt", "deal_uuid", w.dealUUID, "error", err)
+		}
+	}
+
+	w.w.WriteHeader(statusCode)
 }
 
 func parsePiecePath(path string) (string, bool) {
