@@ -86,10 +86,10 @@ func (svc *RetrievalService) PiecePaymentMiddleware(MaxHeaderSize int) func(http
 }
 
 type receiptResponseWriter struct {
-	w          http.ResponseWriter
-	logger     *slog.Logger
-	dealUUID   string
-	txHash     string
+	w           http.ResponseWriter
+	logger      *slog.Logger
+	dealUUID    string
+	txHash      string
 	wroteHeader bool
 }
 
