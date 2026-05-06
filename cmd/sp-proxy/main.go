@@ -76,7 +76,7 @@ func root() *cobra.Command {
 				return fmt.Errorf("invalid --pay-payee-address %q (use 0x… FVM address or leave empty to use settlement wallet)", payee)
 			}
 
-			svcConfig := piecepayment.ServiceConfig{
+			svcConfig := piecepayment.Config{
 				PriceFIL:     priceFIL,
 				ClientQuery:  clientQuery,
 				ClientHeader: clientHeader,

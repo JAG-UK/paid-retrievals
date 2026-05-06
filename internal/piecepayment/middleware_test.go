@@ -32,7 +32,7 @@ func newTestStore(t *testing.T) *sqlitestore.Store {
 	return s
 }
 
-func newTestHandler(cfg pp.ServiceConfig) http.Handler {
+func newTestHandler(cfg pp.Config) http.Handler {
 	if cfg.PriceFIL == "" {
 		cfg.PriceFIL = "0.01"
 	}
@@ -151,7 +151,7 @@ func TestQuoteThenPaidSuccess(t *testing.T) {
 	}
 	client := crypto.PubkeyToAddress(pk.PublicKey).Hex()
 	mock := &mockPaySettler{}
-	h := newTestHandler(pp.ServiceConfig{
+	h := newTestHandler(pp.Config{
 		PriceFIL:     "0.1",
 		FilecoinPay:  mock,
 		QuotePayee0x: testQuotePayee0x,
@@ -215,7 +215,7 @@ func TestReplayNonceRejected(t *testing.T) {
 	}
 	client := crypto.PubkeyToAddress(pk.PublicKey).Hex()
 	mock := &mockPaySettler{}
-	h := newTestHandler(pp.ServiceConfig{
+	h := newTestHandler(pp.Config{
 		PriceFIL:     "0.1",
 		FilecoinPay:  mock,
 		QuotePayee0x: testQuotePayee0x,

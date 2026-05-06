@@ -67,7 +67,7 @@ func (e *BadRequestError) Error() string {
 	return e.Message
 }
 
-type ServiceConfig struct {
+type Config struct {
 	PriceFIL     string
 	ClientQuery  string
 	ClientHeader string
@@ -80,11 +80,11 @@ type ServiceConfig struct {
 }
 
 type RetrievalService struct {
-	cfg    ServiceConfig
+	cfg    Config
 	logger *slog.Logger
 }
 
-func NewRetrievalService(cfg ServiceConfig) *RetrievalService {
+func NewRetrievalService(cfg Config) *RetrievalService {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
