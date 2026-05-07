@@ -13,7 +13,8 @@ import (
 var cidPattern = regexp.MustCompile(`^[a-zA-Z0-9._:-]{8,256}$`)
 
 const (
-	problemBase  = "https://paymentauth.org/problems/"
+	problemBase = "https://paymentauth.org/problems/"
+	// We have a "human scale" of 10 minutes for the challenge TTL to allow wallet funding and retry.
 	challengeTTL = 10 * time.Minute
 )
 
