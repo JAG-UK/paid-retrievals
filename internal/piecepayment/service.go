@@ -164,21 +164,25 @@ func (s *RetrievalService) AuthorizeAndSettle(r *http.Request, cid, rawHdr strin
 	if err != nil {
 		return nil, fmt.Errorf("parse price fil: %w", err)
 	}
-	payer := common.HexToAddress(strings.TrimSpace(deal.Client))
-	payeeAddr := common.HexToAddress(strings.TrimSpace(deal.Payee0x))
-	txHash, err := s.cfg.FilecoinPay.SettleIfFunded(r.Context(), payer, payeeAddr, priceWei)
-	if err != nil {
-		return nil, &PaymentRequiredError{Deal: deal, Code: "payment-insufficient", Detail: "Filecoin Pay rail or available balance is insufficient for settlement"}
-	}
 	if err := s.cfg.Store.ConsumeNonce(r.Context(), deal.DealUUID, hdr.Nonce, hdr.ExpiresUnix); err != nil {
 		if err == ErrReplayNonce {
 			return nil, &PaymentRequiredError{Deal: deal, Code: "invalid-challenge", Detail: "Credential nonce has already been used"}
 		}
 		return nil, fmt.Errorf("consume nonce: %w", err)
 	}
-	if err := s.cfg.Store.MarkPaid(r.Context(), deal.DealUUID); err != nil {
-		return nil, fmt.Errorf("mark paid: %w", err)
+	payer := common.HexToAddress(strings.TrimSpace(deal.Client))
+	payeeAddr := common.HexToAddress(strings.TrimSpace(deal.Payee0x))
+	txHash, err := s.cfg.FilecoinPay.SettleIfFunded(r.Context(), payer, payeeAddr, priceWei)
+	if err != nil {
+		return nil, &PaymentRequiredError{Deal: deal, Code: "payment-insufficient", Detail: "Filecoin Pay rail or available balance is insufficient for settlement"}
 	}
+	s.logger.Info("filecoin pay rail settled", "deal_uuid", deal.DealUUID, "settle_tx", txHash, "payer", payer.Hex(), "payee", payeeAddr.Hex())
+
+	if err := s.cfg.Store.MarkPaid(r.Context(), deal.DealUUID); err != nil {
+		// We don't return an error here because we want to continue serving the piece even if marking paid fails as payment has been settled.
+		s.logger.Error("failed to mark deal paid", "error", err, "deal_uuid", deal.DealUUID)
+	}
+	s.logger.Info("paid retrieval authorized", "deal_uuid", deal.DealUUID, "client", deal.Client, "cid", cid)
 	return &PaidOutcome{Deal: deal, CID: cid, TxHash: txHash}, nil
 }
 
