@@ -195,34 +195,11 @@ func issueChallengeForDeal(w http.ResponseWriter, r *http.Request, deal *Deal, l
 	if deal == nil {
 		return
 	}
-	challenge := mpp.Challenge{
-		ID:          deal.DealUUID,
-		Realm:       mpp.RealmPrefix + r.Host,
-		Method:      mpp.MethodID,
-		Intent:      mpp.IntentID,
-		Description: "Filecoin piece retrieval charge",
-		Opaque: map[string]string{
-			"deal_uuid": deal.DealUUID,
-			"cid":       deal.CID,
-		},
-		Request: mpp.PaymentRequest{
-			DealUUID: deal.DealUUID,
-			CID:      deal.CID,
-			PriceFIL: deal.PriceFIL,
-			Payee0x:  deal.Payee0x,
-			Method:   http.MethodGet,
-			Path:     "/piece/" + deal.CID,
-			Host:     r.Host,
-		},
-		Expires: time.Now().Add(challengeTTL).UTC().Format(time.RFC3339),
+	challenge := buildChallenge(r.Host, deal.DealUUID, deal.CID, deal.PriceFIL, deal.Payee0x)
+	if err := mpp.WritePaymentRequired(w, challenge); err != nil {
+		logger.Error("failed to write payment challenge", "deal_uuid", challenge.ID, "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
-	wa, err := challenge.WWWAuthenticateValue()
-	if err != nil {
-		logger.Warn("failed to write fresh challenge", "deal_uuid", deal.DealUUID, "error", err)
-		return
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("WWW-Authenticate", wa)
 }
 
 func buildChallenge(host, dealID, cid, priceFIL, payee string) mpp.Challenge {
@@ -245,7 +222,7 @@ func buildChallenge(host, dealID, cid, priceFIL, payee string) mpp.Challenge {
 			Path:     "/piece/" + cid,
 			Host:     host,
 		},
-		Expires: time.Now().Add(2 * time.Minute).UTC().Format(time.RFC3339),
+		Expires: time.Now().Add(challengeTTL).UTC().Format(time.RFC3339),
 	}
 }
 
