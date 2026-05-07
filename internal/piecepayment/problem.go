@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
-	"time"
 
 	"github.com/fidlabs/paid-retrievals/internal/mpp"
 )
@@ -14,8 +13,6 @@ var cidPattern = regexp.MustCompile(`^[a-zA-Z0-9._:-]{8,256}$`)
 
 const (
 	problemBase = "https://paymentauth.org/problems/"
-	// We have a "human scale" of 10 minutes for the challenge TTL to allow wallet funding and retry.
-	challengeTTL = 10 * time.Minute
 )
 
 type problemDetail struct {
@@ -23,40 +20,6 @@ type problemDetail struct {
 	Title  string `json:"title"`
 	Status int    `json:"status"`
 	Detail string `json:"detail,omitempty"`
-}
-
-func issueChallengeForDeal(w http.ResponseWriter, r *http.Request, deal *Deal, logger *slog.Logger) {
-	if deal == nil {
-		return
-	}
-	challenge := mpp.Challenge{
-		ID:          deal.DealUUID,
-		Realm:       mpp.RealmPrefix + r.Host,
-		Method:      mpp.MethodID,
-		Intent:      mpp.IntentID,
-		Description: "Filecoin piece retrieval charge",
-		Opaque: map[string]string{
-			"deal_uuid": deal.DealUUID,
-			"cid":       deal.CID,
-		},
-		Request: mpp.PaymentRequest{
-			DealUUID: deal.DealUUID,
-			CID:      deal.CID,
-			PriceFIL: deal.PriceFIL,
-			Payee0x:  deal.Payee0x,
-			Method:   http.MethodGet,
-			Path:     "/piece/" + deal.CID,
-			Host:     r.Host,
-		},
-		Expires: time.Now().Add(challengeTTL).UTC().Format(time.RFC3339),
-	}
-	wa, err := challenge.WWWAuthenticateValue()
-	if err != nil {
-		logger.Warn("failed to write fresh challenge", "deal_uuid", deal.DealUUID, "error", err)
-		return
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("WWW-Authenticate", wa)
 }
 
 func writeProblem(w http.ResponseWriter, status int, code, detail string) {
