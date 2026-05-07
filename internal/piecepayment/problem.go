@@ -12,7 +12,10 @@ import (
 
 var cidPattern = regexp.MustCompile(`^[a-zA-Z0-9._:-]{8,256}$`)
 
-const problemBase = "https://paymentauth.org/problems/"
+const (
+	problemBase  = "https://paymentauth.org/problems/"
+	challengeTTL = 10 * time.Minute
+)
 
 type problemDetail struct {
 	Type   string `json:"type"`
@@ -44,7 +47,7 @@ func issueChallengeForDeal(w http.ResponseWriter, r *http.Request, deal *Deal, l
 			Path:     "/piece/" + deal.CID,
 			Host:     r.Host,
 		},
-		Expires: time.Now().Add(2 * time.Minute).UTC().Format(time.RFC3339),
+		Expires: time.Now().Add(challengeTTL).UTC().Format(time.RFC3339),
 	}
 	wa, err := challenge.WWWAuthenticateValue()
 	if err != nil {
