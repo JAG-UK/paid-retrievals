@@ -76,7 +76,7 @@ func root() *cobra.Command {
 				return fmt.Errorf("invalid --pay-payee-address %q (use 0x… FVM address or leave empty to use settlement wallet)", payee)
 			}
 
-			svcConfig := piecepayment.Config{
+			config := piecepayment.Config{
 				PriceFIL:     priceFIL,
 				ClientQuery:  clientQuery,
 				ClientHeader: clientHeader,
@@ -87,7 +87,7 @@ func root() *cobra.Command {
 				Logger:       logger,
 				Store:        store,
 			}
-			svc := piecepayment.NewRetrievalService(svcConfig)
+			svc := piecepayment.NewRetrievalService(config)
 
 			pieceHandler := svc.PiecePaymentMiddleware(MaxHeaderSize)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				authCtx, ok := piecepayment.PieceAuthFromContext(r.Context())
