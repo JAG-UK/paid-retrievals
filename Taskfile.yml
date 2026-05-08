@@ -109,3 +109,31 @@ tasks:
     desc: Remove build outputs
     cmds:
       - rm -rf bin "{{.LOCAL_ROOT}}"
+
+  nginx:piece:
+    desc: Start nginx container serving a dummy file under /piece
+    cmds:
+      - mkdir -p .task/nginx-piece/piece
+      - printf "DUMMY-CAR\nCID=bafydummy\n" > .task/nginx-piece/piece/index.html
+      - |
+        cat > .task/nginx-piece/default.conf <<'EOF'
+        server {
+          listen 80;
+          server_name _;
+          root /usr/share/nginx/html;
+
+          location /piece/ {
+            try_files $uri /piece/index.html;
+          }
+        }
+        EOF
+      - docker rm -f paid-retrievals-nginx-piece >/dev/null 2>&1 || true
+      - docker run -d --name paid-retrievals-nginx-piece -p 8788:80 -v "{{.TASKFILE_DIR}}/.task/nginx-piece:/usr/share/nginx/html:ro" -v "{{.TASKFILE_DIR}}/.task/nginx-piece/default.conf:/etc/nginx/conf.d/default.conf:ro" nginx:stable-alpine
+      - echo "nginx started at http://127.0.0.1:8788/piece/"
+
+  nginx:piece:clean:
+    desc: Stop/remove nginx piece container and delete nginx image
+    cmds:
+      - docker rm -f paid-retrievals-nginx-piece >/dev/null 2>&1 || true
+      - docker rmi nginx:stable-alpine >/dev/null 2>&1 || true
+      - echo "nginx piece container stopped and image removed (if present)"

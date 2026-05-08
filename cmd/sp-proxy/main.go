@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,11 +46,31 @@ func root() *cobra.Command {
 		payPaymentsAddress string
 		payPayeeAddress    string
 		payDebug           bool
+		upstreamHost       string
+		upstreamPort       int
 	)
 	c := &cobra.Command{
 		Use:   "sp-proxy",
 		Short: "Internet-facing /piece/<cid> MPP challenge + paid retrieval (Filecoin Pay + EVM)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			upstreamHost = strings.TrimSpace(upstreamHost)
+			if upstreamHost == "" {
+				return fmt.Errorf("--upstream-host is required")
+			}
+			if upstreamPort <= 0 || upstreamPort > 65535 {
+				return fmt.Errorf("invalid --upstream-port %d (must be in range 1-65535)", upstreamPort)
+			}
+			upstreamURL, err := url.Parse("http://" + upstreamHost + ":" + strconv.Itoa(upstreamPort))
+			if err != nil {
+				return fmt.Errorf("parse upstream URL: %w", err)
+			}
+			upstreamProxy := httputil.NewSingleHostReverseProxy(upstreamURL)
+			upstreamProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+				logger := slog.Default()
+				logger.Error("upstream proxy request failed", "host", upstreamHost, "port", upstreamPort, "path", r.URL.Path, "error", err)
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+			}
+
 			store, err := sqlitestore.OpenStore(dbPath)
 			if err != nil {
 				return err
@@ -90,17 +113,11 @@ func root() *cobra.Command {
 			svc := piecepayment.NewRetrievalService(config)
 
 			pieceHandler := svc.PiecePaymentMiddleware(MaxHeaderSize)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				authCtx, ok := piecepayment.PieceAuthFromContext(r.Context())
-				if !ok {
+				if _, ok := piecepayment.PieceAuthFromContext(r.Context()); !ok {
 					http.Error(w, "internal error", http.StatusInternalServerError)
 					return
 				}
-				body := dummyCAR(authCtx.CID, authCtx.DealUUID)
-				w.Header().Set("Content-Type", "application/vnd.ipld.car")
-				w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.car\"", authCtx.CID))
-				w.Header().Set("Cache-Control", "no-store")
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write(body)
+				upstreamProxy.ServeHTTP(w, r)
 			}))
 
 			logger.Info("filecoin pay", "payments", fc.PaymentsAddress().Hex(), "payee_0x", payee, "settler", fc.SignerAddress().Hex(),
@@ -145,6 +162,8 @@ func root() *cobra.Command {
 	c.Flags().StringVar(&payPaymentsAddress, "pay-payments-address", getenv("SP_PROXY_PAY_PAYMENTS_ADDRESS", ""), "Filecoin Pay payments contract (0x); empty = built-in address for chain")
 	c.Flags().StringVar(&payPayeeAddress, "pay-payee-address", getenv("SP_PROXY_PAY_PAYEE_ADDRESS", ""), "FVM address clients should open/fund rails to; empty = settlement wallet address")
 	c.Flags().BoolVar(&payDebug, "pay-debug", false, "Log Filecoin Pay steps (HTTP + on-chain); Info level. Implied filpay trace; use with --verbose for more RPC detail")
+	c.Flags().StringVar(&upstreamHost, "upstream-host", getenv("SP_PROXY_UPSTREAM_HOST", "127.0.0.1"), "Upstream HTTP server host for proxied /piece requests")
+	c.Flags().IntVar(&upstreamPort, "upstream-port", mustParsePort(getenv("SP_PROXY_UPSTREAM_PORT", "8788")), "Upstream HTTP server port for proxied /piece requests")
 	return c
 }
 
@@ -156,7 +175,10 @@ func getenv(key, fallback string) string {
 	return v
 }
 
-func dummyCAR(cid, deal string) []byte {
-	// Placeholder payload for first-commit integration testing.
-	return []byte("DUMMY-CAR\nCID=" + cid + "\nDEAL=" + deal + "\n")
+func mustParsePort(raw string) int {
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 8788
+	}
+	return v
 }
