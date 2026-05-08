@@ -113,10 +113,6 @@ func root() *cobra.Command {
 			svc := piecepayment.NewRetrievalService(config)
 
 			pieceHandler := svc.PiecePaymentMiddleware(MaxHeaderSize)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if _, ok := piecepayment.PieceAuthFromContext(r.Context()); !ok {
-					http.Error(w, "internal error", http.StatusInternalServerError)
-					return
-				}
 				upstreamProxy.ServeHTTP(w, r)
 			}))
 

@@ -1,6 +1,7 @@
 package piecepayment
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -42,6 +43,13 @@ func (svc *RetrievalService) PiecePaymentMiddleware(MaxHeaderSize int) func(http
 
 			rawHdr := strings.TrimSpace(r.Header.Get("Authorization"))
 			if rawHdr == "" {
+				// If there is no authorization header, we need to check if the upstream exists before issuing a payment challenge
+				exists, status := upstreamExists(next, r)
+				if !exists {
+					logger.Debug("upstream does not exist", "path", r.URL.Path, "status", status)
+					w.WriteHeader(status)
+					return
+				}
 				outcome, err := svc.IssueQuote(r, cid)
 				if err != nil {
 					var badReq *BadRequestError
@@ -58,6 +66,7 @@ func (svc *RetrievalService) PiecePaymentMiddleware(MaxHeaderSize int) func(http
 				}
 				return
 			}
+			// We assume that the upstream exists if there is an authorization header as we must have issued a payment challenge already
 			if len(rawHdr) > MaxHeaderSize {
 				logger.Warn("payment header too large", "path", r.URL.Path, "size", len(rawHdr), "max", MaxHeaderSize)
 				http.Error(w, "forbidden", http.StatusForbidden)
@@ -132,4 +141,43 @@ func parsePiecePath(path string) (string, bool) {
 		return "", false
 	}
 	return cid, true
+}
+
+func upstreamExists(next http.Handler, r *http.Request) (bool, int) {
+	probeReq := r.Clone(r.Context())
+	probeReq.Method = http.MethodHead
+	probeReq.Header = r.Header.Clone()
+	probeReq.Header.Del("Authorization")
+	probeReq.ContentLength = 0
+	probeReq.Body = http.NoBody
+	probeReq.GetBody = nil
+
+	rec := newProbeResponseWriter()
+	next.ServeHTTP(rec, probeReq)
+	return rec.statusCode >= http.StatusOK && rec.statusCode < http.StatusMultipleChoices, rec.statusCode
+}
+
+type probeResponseWriter struct {
+	header     http.Header
+	body       bytes.Buffer
+	statusCode int
+}
+
+func newProbeResponseWriter() *probeResponseWriter {
+	return &probeResponseWriter{
+		header:     make(http.Header),
+		statusCode: http.StatusOK,
+	}
+}
+
+func (w *probeResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *probeResponseWriter) Write(p []byte) (int, error) {
+	return w.body.Write(p)
+}
+
+func (w *probeResponseWriter) WriteHeader(statusCode int) {
+	w.statusCode = statusCode
 }

@@ -47,12 +47,7 @@ func newTestHandler(cfg pp.Config) http.Handler {
 	}
 	svc := pp.NewRetrievalService(cfg)
 	pieceHandler := svc.PiecePaymentMiddleware(4096)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authCtx, ok := pp.PieceAuthFromContext(r.Context())
-		if !ok {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		body := []byte("DUMMY-CAR\nCID=" + authCtx.CID + "\nDEAL=" + authCtx.DealUUID + "\n")
+		body := []byte("DUMMY-CAR\nPATH=" + r.URL.Path + "\n")
 		w.Header().Set("Content-Type", "application/vnd.ipld.car")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
