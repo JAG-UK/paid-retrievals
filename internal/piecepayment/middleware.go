@@ -1,0 +1,135 @@
+package piecepayment
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/fidlabs/paid-retrievals/internal/mpp"
+)
+
+type pieceAuthContextKey struct{}
+
+type PieceAuthContext struct {
+	DealUUID string
+	CID      string
+	TxHash   string
+}
+
+func PieceAuthFromContext(ctx context.Context) (PieceAuthContext, bool) {
+	v, ok := ctx.Value(pieceAuthContextKey{}).(PieceAuthContext)
+	return v, ok
+}
+
+func (svc *RetrievalService) PiecePaymentMiddleware(MaxHeaderSize int) func(http.Handler) http.Handler {
+	if svc == nil {
+		panic("piecepayment: RetrievalService is required")
+	}
+	logger := svc.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cid, ok := parsePiecePath(r.URL.Path)
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+
+			rawHdr := strings.TrimSpace(r.Header.Get("Authorization"))
+			if rawHdr == "" {
+				outcome, err := svc.IssueQuote(r, cid)
+				if err != nil {
+					var badReq *BadRequestError
+					if errors.As(err, &badReq) {
+						http.Error(w, badReq.Message, http.StatusBadRequest)
+						return
+					}
+					http.Error(w, "internal error", http.StatusInternalServerError)
+					return
+				}
+				if err := mpp.WritePaymentRequired(w, outcome.Challenge); err != nil {
+					logger.Error("failed to write payment challenge", "deal_uuid", outcome.Challenge.ID, "error", err)
+					http.Error(w, "internal error", http.StatusInternalServerError)
+				}
+				return
+			}
+			if len(rawHdr) > MaxHeaderSize {
+				logger.Warn("payment header too large", "path", r.URL.Path, "size", len(rawHdr), "max", MaxHeaderSize)
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+
+			outcome, err := svc.AuthorizeAndSettle(r, cid, rawHdr)
+			if err != nil {
+				var payErr *PaymentRequiredError
+				if errors.As(err, &payErr) {
+					failPaymentRequired(w, r, payErr.Deal, logger, payErr.Code, payErr.Detail)
+					return
+				}
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), pieceAuthContextKey{}, PieceAuthContext{
+				DealUUID: outcome.Deal.DealUUID,
+				CID:      outcome.CID,
+				TxHash:   outcome.TxHash,
+			})
+			next.ServeHTTP(newReceiptResponseWriter(w, logger, outcome.Deal.DealUUID, outcome.TxHash), r.WithContext(ctx))
+		})
+	}
+}
+
+type receiptResponseWriter struct {
+	w           http.ResponseWriter
+	logger      *slog.Logger
+	dealUUID    string
+	txHash      string
+	wroteHeader bool
+}
+
+func newReceiptResponseWriter(w http.ResponseWriter, logger *slog.Logger, dealUUID, txHash string) *receiptResponseWriter {
+	return &receiptResponseWriter{w: w, logger: logger, dealUUID: dealUUID, txHash: txHash}
+}
+
+func (w *receiptResponseWriter) Header() http.Header {
+	return w.w.Header()
+}
+
+func (w *receiptResponseWriter) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.w.Write(p)
+}
+
+func (w *receiptResponseWriter) WriteHeader(statusCode int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+
+	if statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices {
+		if err := mpp.WritePaymentReceipt(w.w.Header(), mpp.MethodID, w.txHash, time.Now()); err != nil {
+			w.logger.Error("failed to write payment receipt", "deal_uuid", w.dealUUID, "error", err)
+		}
+	}
+
+	w.w.WriteHeader(statusCode)
+}
+
+func parsePiecePath(path string) (string, bool) {
+	if !strings.HasPrefix(path, "/piece/") {
+		return "", false
+	}
+	cid := strings.TrimPrefix(path, "/piece/")
+	if cid == "" || strings.Contains(cid, "/") || !cidPattern.MatchString(cid) {
+		return "", false
+	}
+	return cid, true
+}

@@ -1,29 +1,16 @@
-package spproxy
+package sqlitestore
 
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	piecepayment "github.com/fidlabs/paid-retrievals/internal/piecepayment"
+
 	_ "modernc.org/sqlite"
 )
-
-var ErrDealNotFound = errors.New("deal not found")
-
-type Deal struct {
-	DealUUID   string
-	Client     string
-	CID        string
-	PriceFIL   string
-	Payee0x    string
-	CreatedAt  int64
-	PaidAt     int64
-	PaidSeen   int
-	QuotedSeen int
-}
 
 type Store struct {
 	db *sql.DB
@@ -85,8 +72,6 @@ func (s *Store) migrate() error {
 	return nil
 }
 
-var ErrReplayNonce = errors.New("nonce already used")
-
 func (s *Store) InsertQuote(ctx context.Context, dealUUID, client, cid, priceFIL, payee0x string) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
@@ -96,18 +81,16 @@ func (s *Store) InsertQuote(ctx context.Context, dealUUID, client, cid, priceFIL
 	return err
 }
 
-func (s *Store) GetDeal(ctx context.Context, dealUUID string) (*Deal, error) {
-	var d Deal
+func (s *Store) GetDeal(ctx context.Context, dealUUID string) (*piecepayment.Deal, error) {
+	var d piecepayment.Deal
 	err := s.db.QueryRowContext(ctx, `
-		SELECT deal_uuid, client, cid, price_fil, COALESCE(payee_0x, ''), created_at,
-		       COALESCE(last_paid_at, 0), COALESCE(paid_seen, 0), COALESCE(quoted_seen, 0)
+		SELECT deal_uuid, client, cid, price_fil, COALESCE(payee_0x, '')
 		FROM deals WHERE deal_uuid = ?
 	`, dealUUID).Scan(
-		&d.DealUUID, &d.Client, &d.CID, &d.PriceFIL, &d.Payee0x, &d.CreatedAt,
-		&d.PaidAt, &d.PaidSeen, &d.QuotedSeen,
+		&d.DealUUID, &d.Client, &d.CID, &d.PriceFIL, &d.Payee0x,
 	)
 	if err == sql.ErrNoRows {
-		return nil, ErrDealNotFound
+		return nil, piecepayment.ErrDealNotFound
 	}
 	if err != nil {
 		return nil, err
@@ -127,7 +110,7 @@ func (s *Store) MarkPaid(ctx context.Context, dealUUID string) error {
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return ErrDealNotFound
+		return piecepayment.ErrDealNotFound
 	}
 	return nil
 }
@@ -148,7 +131,7 @@ func (s *Store) ConsumeNonce(ctx context.Context, dealUUID, nonce string, expire
 		VALUES(?,?,?,?)
 	`, dealUUID, nonce, expiresUnix, now); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			return ErrReplayNonce
+			return piecepayment.ErrReplayNonce
 		}
 		return err
 	}

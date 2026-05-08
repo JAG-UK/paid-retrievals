@@ -13,8 +13,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/fidlabs/paid-retrievals/internal/filpay"
-	"github.com/fidlabs/paid-retrievals/internal/spproxy"
+	piecepayment "github.com/fidlabs/paid-retrievals/internal/piecepayment"
+	"github.com/fidlabs/paid-retrievals/internal/sqlitestore"
 )
+
+const MaxHeaderSize = 4096
 
 func main() {
 	if err := root().Execute(); err != nil {
@@ -45,7 +48,7 @@ func root() *cobra.Command {
 		Use:   "sp-proxy",
 		Short: "Internet-facing /piece/<cid> MPP challenge + paid retrieval (Filecoin Pay + EVM)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			store, err := spproxy.OpenStore(dbPath)
+			store, err := sqlitestore.OpenStore(dbPath)
 			if err != nil {
 				return err
 			}
@@ -73,21 +76,55 @@ func root() *cobra.Command {
 				return fmt.Errorf("invalid --pay-payee-address %q (use 0x… FVM address or leave empty to use settlement wallet)", payee)
 			}
 
-			cfg := spproxy.Config{
-				PriceFIL:      priceFIL,
-				ClientQuery:   clientQuery,
-				ClientHeader:  clientHeader,
-				MaxHeaderSize: 4096,
-				MaxClockSkew:  time.Duration(maxSkewSec) * time.Second,
-				Logger:        logger,
-				FilecoinPay:   fc,
-				QuotePayee0x:  payee,
-				PayDebug:      payDebug || verbose,
+			config := piecepayment.Config{
+				PriceFIL:     priceFIL,
+				ClientQuery:  clientQuery,
+				ClientHeader: clientHeader,
+				MaxClockSkew: time.Duration(maxSkewSec) * time.Second,
+				QuotePayee0x: payee,
+				PayDebug:     filTrace,
+				FilecoinPay:  fc,
+				Logger:       logger,
+				Store:        store,
 			}
-			logger.Info("filecoin pay", "payments", fc.PaymentsAddress().Hex(), "payee_0x", payee, "settler", fc.SignerAddress().Hex(),
-				"pay_debug_flag", payDebug, "filpay_trace", filTrace, "pay_http_trace", cfg.PayDebug)
+			svc := piecepayment.NewRetrievalService(config)
 
-			h := spproxy.NewHandler(cfg, store)
+			pieceHandler := svc.PiecePaymentMiddleware(MaxHeaderSize)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				authCtx, ok := piecepayment.PieceAuthFromContext(r.Context())
+				if !ok {
+					http.Error(w, "internal error", http.StatusInternalServerError)
+					return
+				}
+				body := dummyCAR(authCtx.CID, authCtx.DealUUID)
+				w.Header().Set("Content-Type", "application/vnd.ipld.car")
+				w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.car\"", authCtx.CID))
+				w.Header().Set("Cache-Control", "no-store")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(body)
+			}))
+
+			logger.Info("filecoin pay", "payments", fc.PaymentsAddress().Hex(), "payee_0x", payee, "settler", fc.SignerAddress().Hex(),
+				"pay_debug_flag", payDebug, "filpay_trace", filTrace, "pay_http_trace", filTrace)
+
+			h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				logger.Debug("incoming request", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
+				if r.Method != http.MethodGet {
+					logger.Warn("method not allowed", "method", r.Method, "path", r.URL.Path)
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				if r.URL.Path == "/health" {
+					logger.Debug("health check")
+					w.Header().Set("Content-Type", "text/plain")
+					_, _ = w.Write([]byte("ok"))
+					return
+				}
+				if strings.HasPrefix(r.URL.Path, "/piece/") {
+					pieceHandler.ServeHTTP(w, r)
+					return
+				}
+				http.NotFound(w, r)
+			})
 
 			logger.Info("sp-proxy listening", "listen", listen, "db", dbPath, "price_fil", priceFIL, "verbose", verbose)
 			return http.ListenAndServe(listen, h)
@@ -117,4 +154,9 @@ func getenv(key, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+func dummyCAR(cid, deal string) []byte {
+	// Placeholder payload for first-commit integration testing.
+	return []byte("DUMMY-CAR\nCID=" + cid + "\nDEAL=" + deal + "\n")
 }
