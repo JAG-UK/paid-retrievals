@@ -11,8 +11,8 @@ import (
 var (
 	reIP4HTTP  = regexp.MustCompile(`^/ip4/([^/]+)/tcp/([0-9]+)/http/?$`)
 	reIP4HTTPS = regexp.MustCompile(`^/ip4/([^/]+)/tcp/([0-9]+)/https/?$`)
-	reDNSHTTP  = regexp.MustCompile(`^/dns4/([^/]+)/tcp/([0-9]+)/http/?$`)
-	reDNSHTTPS = regexp.MustCompile(`^/dns4/([^/]+)/tcp/([0-9]+)/https/?$`)
+	reDNSHTTP  = regexp.MustCompile(`^/dns/([^/]+)/tcp/([0-9]+)/http/?$`)
+	reDNSHTTPS = regexp.MustCompile(`^/dns/([^/]+)/tcp/([0-9]+)/https/?$`)
 )
 
 // HTTPBaseFromMultiaddrString maps a multiaddr string to http(s)://host:port, same rules as lib_piece_endpoints.sh.
