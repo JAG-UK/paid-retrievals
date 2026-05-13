@@ -174,7 +174,13 @@ func probePieceEndpoint(ctx context.Context, cli *http.Client, base *url.URL, ci
 		return nil, nil
 
 	case http.StatusPaymentRequired:
-		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<16))
+		defer res.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		if log != nil {
+			log("challenge response status=%d cid=%s", res.StatusCode, cid)
+			log("challenge response headers: content-type=%q cache-control=%q", res.Header.Get("Content-Type"), res.Header.Get("Cache-Control"))
+			log("challenge response body (truncated): %s", truncateForLog(string(body), 2048))
+		}
 		wa := strings.TrimSpace(res.Header.Get("WWW-Authenticate"))
 		ch, err := mpp.ParseWWWAuthenticate(wa)
 		if err != nil {
@@ -185,12 +191,12 @@ func probePieceEndpoint(ctx context.Context, cli *http.Client, base *url.URL, ci
 		}
 		if ch.Request.DealUUID == "" || ch.Request.PriceFIL == "" {
 			if log != nil {
-				log("probe 402 cid=%s base=%s: invalid MPP challenge request", cid, base.String())
+				log("probe 402 challenge OK cid=%s base=%s: invalid MPP challenge request", cid, base.String())
 			}
 			return nil, errors.New("invalid MPP challenge payload")
 		}
 		if log != nil {
-			log("probe paid quote cid=%s base=%s deal=%s price_fil=%s payee=%s", cid, base.String(), ch.Request.DealUUID, ch.Request.PriceFIL, ch.Request.Payee0x)
+			log("challenge OK payment={id:%s deal_uuid:%s cid:%s price_fil:%s payee_0x:%q}", ch.ID, ch.Request.DealUUID, ch.Request.CID, ch.Request.PriceFIL, ch.Request.Payee0x)
 		}
 		return &Selection{
 			Base:      cloneURLBase(base),
@@ -209,6 +215,14 @@ func probePieceEndpoint(ctx context.Context, cli *http.Client, base *url.URL, ci
 		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<16))
 		return nil, nil
 	}
+}
+
+func truncateForLog(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 func sanitizeFilename(v string) string {

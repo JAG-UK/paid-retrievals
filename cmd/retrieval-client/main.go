@@ -598,48 +598,6 @@ func addFilpayKeyFlags(c *cobra.Command, opts *filpayKeyOpts) {
 	c.PersistentFlags().StringVar(&opts.privateKeyEnv, "filpay-private-key-env", getenv("FILPAY_PRIVATE_KEY_ENV", "FILPAY_PRIVATE_KEY"), "Env var for hex client key")
 }
 
-func requestChallenge(cli *http.Client, base *url.URL, cid, client string, payDebug bool) (*mpp.Challenge, error) {
-	u := *base
-	u.Path = "/piece/" + cid
-	q := u.Query()
-	q.Set("client", client)
-	u.RawQuery = q.Encode()
-	if payDebug {
-		payClientLog("challenge GET %s (expect 402)", u.String())
-	}
-
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	res, err := cli.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-	if payDebug {
-		payClientLog("challenge response status=%d cid=%s", res.StatusCode, cid)
-		payClientLog("challenge response headers: content-type=%q cache-control=%q", res.Header.Get("Content-Type"), res.Header.Get("Cache-Control"))
-		payClientLog("challenge response body (truncated): %s", truncateForLog(string(body), 2048))
-	}
-	if res.StatusCode != http.StatusPaymentRequired {
-		return nil, fmt.Errorf("expected 402 got %d", res.StatusCode)
-	}
-	wa := strings.TrimSpace(res.Header.Get("WWW-Authenticate"))
-	ch, err := mpp.ParseWWWAuthenticate(wa)
-	if err != nil {
-		return nil, fmt.Errorf("invalid WWW-Authenticate challenge: %w", err)
-	}
-	if ch.Request.DealUUID == "" || ch.Request.PriceFIL == "" {
-		return nil, errors.New("invalid challenge request payload")
-	}
-	if payDebug {
-		payClientLog("challenge OK payment={id:%s deal_uuid:%s cid:%s price_fil:%s payee_0x:%q}", ch.ID, ch.Request.DealUUID, ch.Request.CID, ch.Request.PriceFIL, ch.Request.Payee0x)
-	}
-	return ch, nil
-}
-
 func prepareRailsForChallenges(ctx context.Context, fc *filpay.Client, client string, items []challengeItem, payDebug bool) error {
 	payer := common.HexToAddress(client)
 	byPayee := map[string]*big.Int{}
