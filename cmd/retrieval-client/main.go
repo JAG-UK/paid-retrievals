@@ -25,6 +25,7 @@ import (
 	"github.com/fidlabs/paid-retrievals/internal/filpay"
 	"github.com/fidlabs/paid-retrievals/internal/mpp"
 	"github.com/fidlabs/paid-retrievals/internal/paymentheader"
+	"github.com/fidlabs/paid-retrievals/internal/pieceurls"
 )
 
 type filpayKeyOpts struct {
@@ -42,6 +43,9 @@ type problemDetails struct {
 
 type challengeItem struct {
 	CID       string
+	Base      *url.URL
+	Free      bool
+	SavedPath string
 	DealUUID  string
 	PriceFIL  string
 	Payee0x   string
@@ -49,7 +53,7 @@ type challengeItem struct {
 }
 
 func main() {
-	if err := root().Execute(); err != nil {
+	if err := root().ExecuteContext(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -83,7 +87,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 	)
 	c := &cobra.Command{
 		Use:   "fetch",
-		Short: "Fetch multiple piece CIDs: MPP challenge (402) then EVM-signed paid retrieval",
+		Short: "Fetch multiple piece CIDs: discover SP bases, MPP challenge (402), then EVM-signed paid retrieval",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			evmPK, err := filpay.LoadPrivateKey(keyOpts.privateKey, keyOpts.privateKeyFile, keyOpts.privateKeyEnv)
 			if err != nil {
@@ -123,46 +127,92 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 			if err := os.MkdirAll(outDir, 0o755); err != nil {
 				return err
 			}
-			base, err := url.Parse(strings.TrimSpace(spBaseURL))
-			if err != nil {
-				return fmt.Errorf("invalid --sp-base-url: %w", err)
-			}
+			// TODO: The cli timeout is way too short for large datasets.
 			cli := &http.Client{Timeout: 120 * time.Second}
+			discoverCli := &http.Client{Timeout: 90 * time.Second}
+			ctx := cmd.Context()
+			if ctx == nil {
+				ctx = context.Background()
+			}
+
+			probeLog := func(format string, args ...any) {
+				if payDebug {
+					payClientLog(format, args...)
+				}
+			}
+			spOverride := strings.TrimSpace(spBaseURL)
 
 			items := make([]challengeItem, 0, len(allCIDs))
 			if verbose {
-				fmt.Printf("Step 1/%d: fetching MPP challenges for %d CID(s)\n", 2, len(allCIDs))
+				fmt.Printf("Step 1/%d: probing discovered SP bases for %d CID(s)\n", 2, len(allCIDs))
 			}
 
 			for _, cid := range allCIDs {
 				if verbose {
-					fmt.Printf("  - requesting challenge for CID %s\n", cid)
+					fmt.Printf("  - discovering SP HTTP bases for CID %s (filecoin.tools + cid.contact / Lotus)\n", cid)
 				}
-				q, err := requestChallenge(cli, base, cid, client, payDebug)
+				bases, derr := pieceurls.DiscoverPieceHTTPBases(ctx, discoverCli, cid, payRPCURL)
+				if spOverride != "" {
+					ob, perr := url.Parse(spOverride)
+					if perr != nil {
+						return fmt.Errorf("invalid --sp-base-url: %w", perr)
+					}
+					if ob.Scheme == "" || ob.Host == "" {
+						return errors.New("invalid --sp-base-url: URL must include scheme and host (e.g. http://127.0.0.1:8787)")
+					}
+					u := *ob
+					u.Path, u.RawQuery, u.Fragment = "", "", ""
+					bases = []*url.URL{&u}
+					if verbose {
+						fmt.Printf("    --sp-base-url override: probing only %s\n", bases[0].String())
+					}
+				} else {
+					if derr != nil {
+						return fmt.Errorf("discover endpoints for CID %s: %w", cid, derr)
+					}
+					if len(bases) == 0 {
+						return fmt.Errorf("discover: no HTTP endpoints for CID %s (empty filecoin.tools search or no resolvable multiaddrs); use --sp-base-url to force a proxy", cid)
+					}
+					if verbose {
+						fmt.Printf("    found %d unique base URL(s); probing for free CAR or 402 MPP challenge\n", len(bases))
+					}
+				}
+
+				sel, err := pieceurls.SelectBestPieceSource(ctx, cli, cid, client, outDir, bases, probeLog)
 				if err != nil {
-					return fmt.Errorf("dataset incomplete: challenge request failed for CID %s: %w", cid, err)
+					return fmt.Errorf("dataset incomplete: no usable source for CID %s: %w", cid, err)
 				}
-				if payDebug && strings.TrimSpace(q.Request.Payee0x) != "" {
-					payClientLog("challenge includes payee_0x=%s (fund/open native-FIL rail payer=client → payee); SP settles on paid GET", q.Request.Payee0x)
+				if payDebug && !sel.Free && strings.TrimSpace(sel.Payee0x) != "" {
+					payClientLog("selected payee_0x=%s (fund/open native-FIL rail payer=client → payee); SP settles on paid GET", sel.Payee0x)
 				}
 				if verbose {
-					line := fmt.Sprintf("    received challenge: CID %s costs %s FIL (deal %s)", cid, q.Request.PriceFIL, q.Request.DealUUID)
-					if strings.TrimSpace(q.Request.Payee0x) != "" {
-						line += fmt.Sprintf(" payee_0x=%s", q.Request.Payee0x)
+					if sel.Free {
+						fmt.Printf("    free CAR from %s -> %s\n", sel.Base.String(), sel.SavedPath)
+					} else {
+						line := fmt.Sprintf("    selected %s — CID %s costs %s FIL (deal %s)", sel.Base.String(), cid, sel.PriceFIL, sel.DealUUID)
+						if strings.TrimSpace(sel.Payee0x) != "" {
+							line += fmt.Sprintf(" payee_0x=%s", sel.Payee0x)
+						}
+						fmt.Println(line)
 					}
-					fmt.Println(line)
 				}
 				items = append(items, challengeItem{
 					CID:       cid,
-					DealUUID:  q.Request.DealUUID,
-					PriceFIL:  q.Request.PriceFIL,
-					Payee0x:   strings.TrimSpace(q.Request.Payee0x),
-					Challenge: *q,
+					Base:      sel.Base,
+					Free:      sel.Free,
+					SavedPath: sel.SavedPath,
+					DealUUID:  sel.DealUUID,
+					PriceFIL:  sel.PriceFIL,
+					Payee0x:   strings.TrimSpace(sel.Payee0x),
+					Challenge: sel.Challenge,
 				})
 			}
 
 			var prices []string
 			for _, it := range items {
+				if it.Free {
+					continue
+				}
 				prices = append(prices, it.PriceFIL)
 			}
 			total, err := sumFILValues(prices)
@@ -224,9 +274,20 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 			}
 
 			for _, it := range items {
+				if it.Free {
+					if verbose {
+						fmt.Printf("  - CID %s already stored (free): %s\n", it.CID, it.SavedPath)
+					} else {
+						fmt.Printf("stored %s (free)\n", it.SavedPath)
+					}
+					continue
+				}
+				if it.Base == nil {
+					return fmt.Errorf("internal: missing base URL for paid CID %s", it.CID)
+				}
 				piecePath := "/piece/" + it.CID
 				if verbose {
-					fmt.Printf("  - creating MPP proof for CID %s (deal %s)\n", it.CID, it.DealUUID)
+					fmt.Printf("  - creating MPP credential for CID %s (deal %s) via %s\n", it.CID, it.DealUUID, it.Base.String())
 				}
 				h := &mpp.ProofPayload{
 					Version:       mpp.VersionV1,
@@ -236,7 +297,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 					CID:           it.CID,
 					Method:        http.MethodGet,
 					Path:          piecePath,
-					Host:          base.Host,
+					Host:          it.Base.Host,
 					Nonce:         uuid.NewString(),
 					ExpiresUnix:   time.Now().Add(time.Duration(expiresIn) * time.Second).Unix(),
 				}
@@ -257,7 +318,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				outPath, err := downloadCAR(cli, base, it.CID, piecePath, authz, outDir, payDebug)
+				outPath, err := downloadCAR(cli, it.Base, it.CID, piecePath, authz, outDir, payDebug)
 				if err != nil {
 					return err
 				}
@@ -271,7 +332,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&spBaseURL, "sp-base-url", "http://127.0.0.1:8787", "SP proxy base URL")
+	c.Flags().StringVar(&spBaseURL, "sp-base-url", "", "If set, skip using discovered endpoints and probe only this SP HTTP base (e.g. http://127.0.0.1:8787)")
 	c.Flags().StringVar(&outDir, "out-dir", ".", "Output directory")
 	c.Flags().StringArrayVar(&cids, "cid", nil, "CID to fetch (repeatable)")
 	c.Flags().StringVar(&cidFile, "cid-file", "", "File with CIDs (newline or comma separated)")
@@ -280,7 +341,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 	c.Flags().IntVar(&expiresIn, "expires-in-sec", 120, "Header expiry interval in seconds")
 	c.Flags().BoolVar(&verbose, "verbose", false, "Print detailed per-step progress output")
 	c.Flags().BoolVar(&payDebug, "pay-debug", false, "Log Filecoin Pay–related client steps to stderr ([filpay-client])")
-	c.Flags().StringVar(&payRPCURL, "pay-rpc-url", getenv("SP_PROXY_PAY_RPC_URL", "https://api.calibration.node.glif.io/rpc/v1"), "Filecoin RPC (FVM) used to prepare FIL payments account + rail checks")
+	c.Flags().StringVar(&payRPCURL, "pay-rpc-url", getenv("SP_PROXY_PAY_RPC_URL", "https://api.calibration.node.glif.io/rpc/v1"), "Filecoin JSON-RPC URL: FVM payments + Lotus StateMinerInfo for discovery")
 	c.Flags().StringVar(&payPaymentsAddress, "pay-payments-address", getenv("SP_PROXY_PAY_PAYMENTS_ADDRESS", ""), "Filecoin Pay payments contract (0x); empty uses chain default")
 	return c
 }
@@ -331,29 +392,69 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 				return fmt.Errorf("derived client %s does not match filpay signer %s", client, fc.SignerAddress().Hex())
 			}
 
-			// Gather payees from manual flags and optional live challenge requests.
+			// Gather payees from manual flags and optional live MPP challenges (discovery or --sp-base-url).
 			challenges := make([]challengeItem, 0)
 			if len(cids) > 0 || strings.TrimSpace(cidFile) != "" || len(args) > 0 {
-				base, err := url.Parse(strings.TrimSpace(spBaseURL))
-				if err != nil {
-					return fmt.Errorf("invalid --sp-base-url: %w", err)
-				}
 				allCIDs, err := collectCIDs(cids, cidFile, args)
 				if err != nil {
 					return err
 				}
 				cli := &http.Client{Timeout: 120 * time.Second}
+				discoverCli := &http.Client{Timeout: 90 * time.Second}
+				ctx := cmd.Context()
+				if ctx == nil {
+					ctx = context.Background()
+				}
+				probeLog := func(format string, args ...any) {
+					if payDebug {
+						payClientLog(format, args...)
+					}
+				}
+				spOverride := strings.TrimSpace(spBaseURL)
+				probeDir, err := os.MkdirTemp("", "retrieval-client-railcheck-*")
+				if err != nil {
+					return err
+				}
+				defer os.RemoveAll(probeDir)
+
 				for _, cid := range allCIDs {
-					q, err := requestChallenge(cli, base, cid, client, payDebug)
+					var bases []*url.URL
+					if spOverride != "" {
+						ob, perr := url.Parse(spOverride)
+						if perr != nil {
+							return fmt.Errorf("invalid --sp-base-url: %w", perr)
+						}
+						if ob.Scheme == "" || ob.Host == "" {
+							return errors.New("invalid --sp-base-url: URL must include scheme and host")
+						}
+						u := *ob
+						u.Path, u.RawQuery, u.Fragment = "", "", ""
+						bases = []*url.URL{&u}
+					} else {
+						var derr error
+						bases, derr = pieceurls.DiscoverPieceHTTPBases(ctx, discoverCli, cid, payRPCURL)
+						if derr != nil {
+							return fmt.Errorf("discover endpoints for CID %s: %w", cid, derr)
+						}
+						if len(bases) == 0 {
+							return fmt.Errorf("discover: no HTTP endpoints for CID %s; use --sp-base-url to force a proxy", cid)
+						}
+					}
+					sel, err := pieceurls.SelectBestPieceSource(ctx, cli, cid, client, probeDir, bases, probeLog)
 					if err != nil {
-						return fmt.Errorf("challenge request failed for cid=%s: %w", cid, err)
+						return fmt.Errorf("no usable source for CID %s: %w", cid, err)
+					}
+					if sel.Free {
+						continue
 					}
 					challenges = append(challenges, challengeItem{
 						CID:       cid,
-						DealUUID:  q.Request.DealUUID,
-						PriceFIL:  q.Request.PriceFIL,
-						Payee0x:   strings.TrimSpace(q.Request.Payee0x),
-						Challenge: *q,
+						Base:      sel.Base,
+						Free:      false,
+						DealUUID:  sel.DealUUID,
+						PriceFIL:  sel.PriceFIL,
+						Payee0x:   strings.TrimSpace(sel.Payee0x),
+						Challenge: sel.Challenge,
 					})
 				}
 			}
@@ -394,7 +495,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 				}
 			}
 			if len(byPayeeRequired) == 0 {
-				return errors.New("no payees discovered. Provide --payee or challenge CIDs (--cid/--cid-file/args)")
+				return errors.New("no payees discovered. Provide --payee or paid MPP sources for CIDs (--cid/--cid-file/args, with discovery or --sp-base-url)")
 			}
 
 			if len(challenges) > 0 {
@@ -469,13 +570,13 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&spBaseURL, "sp-base-url", "http://127.0.0.1:8787", "SP proxy base URL (used if CID challenges are requested)")
-	c.Flags().StringArrayVar(&cids, "cid", nil, "CID to request challenges for payee discovery (repeatable)")
-	c.Flags().StringVar(&cidFile, "cid-file", "", "File with CIDs for payee discovery via MPP challenges (newline/comma separated)")
+	c.Flags().StringVar(&spBaseURL, "sp-base-url", "", "If set, probe only this SP HTTP base for MPP challenges; empty uses piece URL discovery")
+	c.Flags().StringArrayVar(&cids, "cid", nil, "CID to probe for payee discovery (repeatable)")
+	c.Flags().StringVar(&cidFile, "cid-file", "", "File with CIDs for payee discovery via MPP (newline/comma separated)")
 	c.Flags().StringArrayVar(&payees, "payee", nil, "Explicit payee 0x address to check (repeatable)")
 	c.Flags().StringVar(&requiredFIL, "required-fil", "", "Optional required FIL amount per --payee when no challenges are used")
-	c.Flags().BoolVar(&payDebug, "pay-debug", false, "Enable detailed challenge debug while discovering payees from challenges")
-	c.Flags().StringVar(&payRPCURL, "pay-rpc-url", getenv("SP_PROXY_PAY_RPC_URL", "https://api.calibration.node.glif.io/rpc/v1"), "Filecoin RPC (FVM)")
+	c.Flags().BoolVar(&payDebug, "pay-debug", false, "Enable detailed probe logs while discovering payees from challenges")
+	c.Flags().StringVar(&payRPCURL, "pay-rpc-url", getenv("SP_PROXY_PAY_RPC_URL", "https://api.calibration.node.glif.io/rpc/v1"), "Filecoin JSON-RPC URL: FVM payments + Lotus StateMinerInfo for discovery")
 	c.Flags().StringVar(&payPaymentsAddress, "pay-payments-address", getenv("SP_PROXY_PAY_PAYMENTS_ADDRESS", ""), "Filecoin Pay payments contract (0x); empty uses chain default")
 	return c
 }
@@ -498,52 +599,13 @@ func addFilpayKeyFlags(c *cobra.Command, opts *filpayKeyOpts) {
 	c.PersistentFlags().StringVar(&opts.privateKeyEnv, "filpay-private-key-env", getenv("FILPAY_PRIVATE_KEY_ENV", "FILPAY_PRIVATE_KEY"), "Env var for hex client key")
 }
 
-func requestChallenge(cli *http.Client, base *url.URL, cid, client string, payDebug bool) (*mpp.Challenge, error) {
-	u := *base
-	u.Path = "/piece/" + cid
-	q := u.Query()
-	q.Set("client", client)
-	u.RawQuery = q.Encode()
-	if payDebug {
-		payClientLog("challenge GET %s (expect 402)", u.String())
-	}
-
-	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	res, err := cli.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-	if payDebug {
-		payClientLog("challenge response status=%d cid=%s", res.StatusCode, cid)
-		payClientLog("challenge response headers: content-type=%q cache-control=%q", res.Header.Get("Content-Type"), res.Header.Get("Cache-Control"))
-		payClientLog("challenge response body (truncated): %s", truncateForLog(string(body), 2048))
-	}
-	if res.StatusCode != http.StatusPaymentRequired {
-		return nil, fmt.Errorf("expected 402 got %d", res.StatusCode)
-	}
-	wa := strings.TrimSpace(res.Header.Get("WWW-Authenticate"))
-	ch, err := mpp.ParseWWWAuthenticate(wa)
-	if err != nil {
-		return nil, fmt.Errorf("invalid WWW-Authenticate challenge: %w", err)
-	}
-	if ch.Request.DealUUID == "" || ch.Request.PriceFIL == "" {
-		return nil, errors.New("invalid challenge request payload")
-	}
-	if payDebug {
-		payClientLog("challenge OK payment={id:%s deal_uuid:%s cid:%s price_fil:%s payee_0x:%q}", ch.ID, ch.Request.DealUUID, ch.Request.CID, ch.Request.PriceFIL, ch.Request.Payee0x)
-	}
-	return ch, nil
-}
-
 func prepareRailsForChallenges(ctx context.Context, fc *filpay.Client, client string, items []challengeItem, payDebug bool) error {
 	payer := common.HexToAddress(client)
 	byPayee := map[string]*big.Int{}
 	for _, it := range items {
+		if it.Free {
+			continue
+		}
 		if strings.TrimSpace(it.Payee0x) == "" || !common.IsHexAddress(it.Payee0x) {
 			return fmt.Errorf("challenge %s for cid=%s missing valid payee_0x", it.DealUUID, it.CID)
 		}
@@ -608,6 +670,9 @@ func chargeRailsForChallenges(ctx context.Context, fc *filpay.Client, client str
 	payer := common.HexToAddress(client)
 	byPayee := map[string]*big.Int{}
 	for _, it := range items {
+		if it.Free {
+			continue
+		}
 		if strings.TrimSpace(it.Payee0x) == "" || !common.IsHexAddress(it.Payee0x) {
 			return fmt.Errorf("challenge %s for cid=%s missing valid payee_0x", it.DealUUID, it.CID)
 		}
