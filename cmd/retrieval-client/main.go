@@ -517,7 +517,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 			fmt.Printf("- available_funds_wei=%s\n", availableFunds.String())
 			fmt.Printf("- current_lockup_rate=%s\n", currentLockupRate.String())
 
-			rails, err := fc.ListFILRailsAsPayer(context.Background(), payer)
+			rails, err := fc.ListTokenRailsAsPayer(context.Background(), payer)
 			if err != nil {
 				return err
 			}
@@ -555,7 +555,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 						approval.RateAllowance.String(), approval.LockupAllowance.String(), approval.MaxLockupPeriod.String())
 					fmt.Printf("- rate_used=%s lockup_used=%s\n", approval.RateUsed.String(), approval.LockupUsed.String())
 				}
-				railID, err := fc.FindActiveFILRail(context.Background(), payer, payee)
+				railID, err := fc.FindActiveTokenRail(context.Background(), payer, payee)
 				if err != nil {
 					fmt.Printf("- active_rail=NO (%v)\n", err)
 				} else {
@@ -632,7 +632,7 @@ func prepareRailsForChallenges(ctx context.Context, fc *filpay.Client, client st
 			payeeAddr := common.HexToAddress(payeeHex)
 			approval, aerr := fc.OperatorApproval(ctx, payer, payer)
 			_, _, avail, _, berr := fc.AccountInfoIfSettled(ctx, payer)
-			railID, rerr := fc.FindActiveFILRail(ctx, payer, payeeAddr)
+			railID, rerr := fc.FindActiveTokenRail(ctx, payer, payeeAddr)
 			approved := "unknown"
 			if aerr == nil {
 				approved = fmt.Sprintf("%t", approval.Approved)

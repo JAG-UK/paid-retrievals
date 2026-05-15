@@ -22,7 +22,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-var filToken = common.Address{}
 var uint256Max = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 
 const createRailABIJSON = `[
@@ -83,7 +82,7 @@ const withdrawABIJSON = `[
 	}
 ]`
 
-// Client performs Filecoin Pay reads and settlement txs for native FIL (token address 0x0).
+// Client performs Filecoin Pay reads and settlement txs using USDFC on the connected chain.
 type Client struct {
 	eth          *ethclient.Client
 	payments     *contracts.PaymentsContract
@@ -91,6 +90,7 @@ type Client struct {
 	signerKey    *ecdsa.PrivateKey
 	signerAddr   common.Address
 	paymentsAddr common.Address
+	paymentToken common.Address // USDFC for the chain
 	log          *slog.Logger
 	payTrace     bool // Info-level step logs (--pay-debug); independent of global log level
 }
@@ -104,7 +104,7 @@ type OperatorApprovalStatus struct {
 	MaxLockupPeriod *big.Int
 }
 
-type FILRailDetail struct {
+type TokenRailDetail struct {
 	RailID       *big.Int
 	IsTerminated bool
 	EndEpoch     *big.Int
@@ -152,6 +152,11 @@ func NewClient(ctx context.Context, rpcURL, privateKeyHex, privateKeyFile, priva
 		eth.Close()
 		return nil, fmt.Errorf("filpay: unknown payments contract for chain %d (set payments address explicitly)", chainID.Int64())
 	}
+	tokenAddr, err := resolvePaymentToken(chainID.Int64())
+	if err != nil {
+		eth.Close()
+		return nil, err
+	}
 	pc, err := contracts.NewPaymentsContract(payAddr, eth)
 	if err != nil {
 		eth.Close()
@@ -165,6 +170,7 @@ func NewClient(ctx context.Context, rpcURL, privateKeyHex, privateKeyFile, priva
 		signerKey:    pk,
 		signerAddr:   addr,
 		paymentsAddr: payAddr,
+		paymentToken: tokenAddr,
 	}
 	for _, o := range opts {
 		o(c)
@@ -172,6 +178,7 @@ func NewClient(ctx context.Context, rpcURL, privateKeyHex, privateKeyFile, priva
 	c.payInfo("client initialized",
 		"chain_id", chainID.String(),
 		"payments_contract", payAddr.Hex(),
+		"payment_token", tokenAddr.Hex(),
 		"settler_address", addr.Hex(),
 	)
 	return c, nil
@@ -212,7 +219,7 @@ func (c *Client) ChainID() *big.Int {
 }
 
 func (c *Client) OperatorApproval(ctx context.Context, payer, operator common.Address) (*OperatorApprovalStatus, error) {
-	approved, rateAllowance, lockupAllowance, rateUsed, lockupUsed, maxLockupPeriod, err := c.payments.GetOperatorApproval(ctx, filToken, payer, operator)
+	approved, rateAllowance, lockupAllowance, rateUsed, lockupUsed, maxLockupPeriod, err := c.payments.GetOperatorApproval(ctx, c.paymentToken, payer, operator)
 	if err != nil {
 		return nil, fmt.Errorf("filpay: get operator approval: %w", err)
 	}
@@ -227,24 +234,24 @@ func (c *Client) OperatorApproval(ctx context.Context, payer, operator common.Ad
 }
 
 func (c *Client) AccountInfoIfSettled(ctx context.Context, payer common.Address) (fundedUntilEpoch, currentFunds, availableFunds, currentLockupRate *big.Int, err error) {
-	fundedUntilEpoch, currentFunds, availableFunds, currentLockupRate, err = c.payments.GetAccountInfoIfSettled(ctx, filToken, payer)
+	fundedUntilEpoch, currentFunds, availableFunds, currentLockupRate, err = c.payments.GetAccountInfoIfSettled(ctx, c.paymentToken, payer)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("filpay: getAccountInfoIfSettled: %w", err)
 	}
 	return fundedUntilEpoch, currentFunds, availableFunds, currentLockupRate, nil
 }
 
-func (c *Client) ListFILRailsAsPayer(ctx context.Context, payer common.Address) ([]FILRailDetail, error) {
+func (c *Client) ListTokenRailsAsPayer(ctx context.Context, payer common.Address) ([]TokenRailDetail, error) {
 	offset := big.NewInt(0)
 	limit := big.NewInt(100)
-	var out []FILRailDetail
+	var out []TokenRailDetail
 	for {
-		results, nextOff, _, err := c.payments.GetRailsForPayerAndToken(ctx, payer, filToken, offset, limit)
+		results, nextOff, _, err := c.payments.GetRailsForPayerAndToken(ctx, payer, c.paymentToken, offset, limit)
 		if err != nil {
 			return nil, fmt.Errorf("filpay: list rails: %w", err)
 		}
 		for _, ri := range results {
-			d := FILRailDetail{
+			d := TokenRailDetail{
 				RailID:       ri.RailId,
 				IsTerminated: ri.IsTerminated,
 				EndEpoch:     ri.EndEpoch,
@@ -267,25 +274,25 @@ func (c *Client) ListFILRailsAsPayer(ctx context.Context, payer common.Address) 
 	return out, nil
 }
 
-// PayerFILAvailable returns settled available FIL balance for owner in the payments contract.
-func (c *Client) PayerFILAvailable(ctx context.Context, payer common.Address) (*big.Int, error) {
-	c.payDebug("query payer FIL available (getAccountInfoIfSettled)", "payer", payer.Hex(), "token", filToken.Hex())
-	_, _, avail, _, err := c.payments.GetAccountInfoIfSettled(ctx, filToken, payer)
+// PayerTokenAvailable returns settled available token balance for owner in the payments contract.
+func (c *Client) PayerTokenAvailable(ctx context.Context, payer common.Address) (*big.Int, error) {
+	c.payDebug("query payer token available (getAccountInfoIfSettled)", "payer", payer.Hex(), "token", c.paymentToken.Hex())
+	_, _, avail, _, err := c.payments.GetAccountInfoIfSettled(ctx, c.paymentToken, payer)
 	if err != nil {
 		return nil, fmt.Errorf("filpay: getAccountInfoIfSettled: %w", err)
 	}
-	c.payInfo("payer FIL available (wei)", "payer", payer.Hex(), "available_wei", avail.String())
-	c.payDebug("payer FIL available detail", "payer", payer.Hex(), "available_wei", avail.String())
+	c.payInfo("payer token available (wei)", "payer", payer.Hex(), "available_wei", avail.String())
+	c.payDebug("payer token available detail", "payer", payer.Hex(), "available_wei", avail.String())
 	return avail, nil
 }
 
-// EnsureOperatorApproval checks/sets native-FIL operator approval for payer -> operator.
+// EnsureOperatorApproval checks/sets token operator approval for payer -> operator.
 func (c *Client) EnsureOperatorApproval(ctx context.Context, payer, operator common.Address) error {
 	if payer == (common.Address{}) || operator == (common.Address{}) {
 		return errors.New("filpay: empty payer or operator")
 	}
-	c.payInfo("checking operator approval", "payer", payer.Hex(), "operator", operator.Hex(), "token", filToken.Hex())
-	approved, rateAllowance, lockupAllowance, _, _, maxLockupPeriod, err := c.payments.GetOperatorApproval(ctx, filToken, payer, operator)
+	c.payInfo("checking operator approval", "payer", payer.Hex(), "operator", operator.Hex(), "token", c.paymentToken.Hex())
+	approved, rateAllowance, lockupAllowance, _, _, maxLockupPeriod, err := c.payments.GetOperatorApproval(ctx, c.paymentToken, payer, operator)
 	if err != nil {
 		return fmt.Errorf("filpay: get operator approval: %w", err)
 	}
@@ -303,7 +310,7 @@ func (c *Client) EnsureOperatorApproval(ctx context.Context, payer, operator com
 		return fmt.Errorf("filpay: transactor: %w", err)
 	}
 	opts.Context = ctx
-	tx, err := c.payments.SetOperatorApproval(opts, filToken, operator, true, uint256Max, uint256Max, uint256Max)
+	tx, err := c.payments.SetOperatorApproval(opts, c.paymentToken, operator, true, uint256Max, uint256Max, uint256Max)
 	if err != nil {
 		return fmt.Errorf("filpay: setOperatorApproval: %w", err)
 	}
@@ -314,7 +321,7 @@ func (c *Client) EnsureOperatorApproval(ctx context.Context, payer, operator com
 	return nil
 }
 
-func (c *Client) CreateFILRail(ctx context.Context, payer, payee common.Address) (string, error) {
+func (c *Client) CreateTokenRail(ctx context.Context, payer, payee common.Address) (string, error) {
 	if payer == (common.Address{}) || payee == (common.Address{}) {
 		return "", errors.New("filpay: empty payer or payee")
 	}
@@ -332,7 +339,7 @@ func (c *Client) CreateFILRail(ctx context.Context, payer, payee common.Address)
 	}
 	opts.Context = ctx
 	c.payInfo("submitting createRail", "payer", payer.Hex(), "payee", payee.Hex(), "operator", c.signerAddr.Hex())
-	tx, err := bound.Transact(opts, "createRail", filToken, payer, payee, common.Address{}, big.NewInt(0), common.Address{})
+	tx, err := bound.Transact(opts, "createRail", c.paymentToken, payer, payee, common.Address{}, big.NewInt(0), common.Address{})
 	if err != nil {
 		return "", fmt.Errorf("filpay: createRail: %w", err)
 	}
@@ -350,7 +357,7 @@ func (c *Client) ChargeRailOneTime(ctx context.Context, payer, payee common.Addr
 	if amountWei == nil || amountWei.Sign() <= 0 {
 		return "", errors.New("filpay: invalid one-time amount")
 	}
-	railID, err := c.FindActiveFILRail(ctx, payer, payee)
+	railID, err := c.FindActiveTokenRail(ctx, payer, payee)
 	if err != nil {
 		return "", err
 	}
@@ -427,18 +434,18 @@ func (c *Client) EnsureRailLockup(ctx context.Context, railID, requiredWei *big.
 	return nil
 }
 
-// WithdrawFILAvailable withdraws available FIL from owner's payments account to owner's wallet.
+// WithdrawTokenAvailable withdraws available tokens from owner's payments account to owner's wallet.
 // Requires owner == signer.
-func (c *Client) WithdrawFILAvailable(ctx context.Context, owner common.Address) (txHash string, amountWei *big.Int, err error) {
+func (c *Client) WithdrawTokenAvailable(ctx context.Context, owner common.Address) (txHash string, amountWei *big.Int, err error) {
 	if owner != c.signerAddr {
 		return "", nil, fmt.Errorf("filpay: owner %s does not match signer %s for withdraw", owner.Hex(), c.signerAddr.Hex())
 	}
-	avail, err := c.PayerFILAvailable(ctx, owner)
+	avail, err := c.PayerTokenAvailable(ctx, owner)
 	if err != nil {
 		return "", nil, err
 	}
 	if avail.Sign() <= 0 {
-		c.payInfo("no FIL available to withdraw", "owner", owner.Hex())
+		c.payInfo("no tokens available to withdraw", "owner", owner.Hex())
 		return "", big.NewInt(0), nil
 	}
 	parsed, err := abi.JSON(strings.NewReader(withdrawABIJSON))
@@ -451,8 +458,8 @@ func (c *Client) WithdrawFILAvailable(ctx context.Context, owner common.Address)
 		return "", nil, fmt.Errorf("filpay: transactor: %w", err)
 	}
 	opts.Context = ctx
-	c.payInfo("submitting FIL withdraw", "owner", owner.Hex(), "amount_wei", avail.String())
-	tx, err := bound.Transact(opts, "withdraw", filToken, avail)
+	c.payInfo("submitting token withdraw", "owner", owner.Hex(), "amount_wei", avail.String())
+	tx, err := bound.Transact(opts, "withdraw", c.paymentToken, avail)
 	if err != nil {
 		return "", nil, fmt.Errorf("filpay: withdraw: %w", err)
 	}
@@ -464,40 +471,85 @@ func (c *Client) WithdrawFILAvailable(ctx context.Context, owner common.Address)
 	return h, avail, nil
 }
 
-// EnsurePayerFILBalance deposits missing FIL into the payer payments account.
-func (c *Client) EnsurePayerFILBalance(ctx context.Context, payer common.Address, requiredWei *big.Int) error {
+// EnsurePayerTokenBalance deposits missing USDFC into the payer's Filecoin Pay account.
+func (c *Client) EnsurePayerTokenBalance(ctx context.Context, payer common.Address, requiredWei *big.Int) error {
 	if requiredWei == nil || requiredWei.Sign() <= 0 {
-		return errors.New("filpay: invalid required FIL amount")
+		return errors.New("filpay: invalid required payment amount")
 	}
-	avail, err := c.PayerFILAvailable(ctx, payer)
+	avail, err := c.PayerTokenAvailable(ctx, payer)
 	if err != nil {
 		return err
 	}
 	if avail.Cmp(requiredWei) >= 0 {
-		c.payInfo("payer FIL balance already sufficient", "payer", payer.Hex(), "available_wei", avail.String(), "required_wei", requiredWei.String())
+		c.payInfo("payer USDFC balance already sufficient", "payer", payer.Hex(), "available_wei", avail.String(), "required_wei", requiredWei.String())
 		return nil
 	}
 	if payer != c.signerAddr {
 		return fmt.Errorf("filpay: payer %s does not match signer %s for deposit", payer.Hex(), c.signerAddr.Hex())
 	}
 	deficit := new(big.Int).Sub(requiredWei, avail)
-	c.payInfo("submitting FIL deposit", "payer", payer.Hex(), "deposit_wei", deficit.String(),
+
+	usdfc, err := contracts.NewERC20Contract(c.paymentToken, c.eth)
+	if err != nil {
+		return fmt.Errorf("filpay: bind USDFC: %w", err)
+	}
+	walletBal, err := usdfc.BalanceOf(ctx, payer)
+	if err != nil {
+		return fmt.Errorf("filpay: USDFC wallet balance: %w", err)
+	}
+	if walletBal.Cmp(deficit) < 0 {
+		return fmt.Errorf("filpay: insufficient USDFC in wallet for %s: have %s, need %s more for Filecoin Pay deposit",
+			payer.Hex(), walletBal.String(), deficit.String())
+	}
+	if err := c.ensureUSDFCApproval(ctx, payer, deficit); err != nil {
+		return err
+	}
+
+	c.payInfo("submitting USDFC deposit", "payer", payer.Hex(), "token", c.paymentToken.Hex(), "deposit_wei", deficit.String(),
 		"available_wei_before", avail.String(), "required_wei", requiredWei.String())
 	opts, err := bind.NewKeyedTransactorWithChainID(c.signerKey, c.chainID)
 	if err != nil {
 		return fmt.Errorf("filpay: transactor: %w", err)
 	}
 	opts.Context = ctx
-	opts.Value = deficit
-	tx, err := c.payments.Deposit(opts, filToken, payer, deficit)
+	opts.Value = nil // ERC20 deposit must not send native token
+	tx, err := c.payments.Deposit(opts, c.paymentToken, payer, deficit)
 	if err != nil {
-		return fmt.Errorf("filpay: deposit FIL: %w", err)
+		return fmt.Errorf("filpay: deposit USDFC: %w", err)
 	}
 	c.payInfo("deposit tx submitted", "tx_hash", tx.Hash().Hex(), "payer", payer.Hex(), "deposit_wei", deficit.String())
 	if err := c.waitTxMined(ctx, tx, "deposit"); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (c *Client) ensureUSDFCApproval(ctx context.Context, owner common.Address, amount *big.Int) error {
+	usdfc, err := contracts.NewERC20Contract(c.paymentToken, c.eth)
+	if err != nil {
+		return fmt.Errorf("filpay: bind USDFC: %w", err)
+	}
+	allowance, err := usdfc.Allowance(ctx, owner, c.paymentsAddr)
+	if err != nil {
+		return fmt.Errorf("filpay: get USDFC allowance: %w", err)
+	}
+	if allowance.Cmp(amount) >= 0 {
+		c.payInfo("USDFC allowance sufficient", "owner", owner.Hex(), "allowance", allowance.String(), "required", amount.String())
+		return nil
+	}
+	c.payInfo("submitting USDFC approve", "owner", owner.Hex(), "spender", c.paymentsAddr.Hex(), "amount", amount.String(),
+		"current_allowance", allowance.String())
+	opts, err := bind.NewKeyedTransactorWithChainID(c.signerKey, c.chainID)
+	if err != nil {
+		return fmt.Errorf("filpay: transactor: %w", err)
+	}
+	opts.Context = ctx
+	tx, err := usdfc.Approve(opts, c.paymentsAddr, amount)
+	if err != nil {
+		return fmt.Errorf("filpay: approve USDFC: %w", err)
+	}
+	c.payInfo("approve tx submitted", "tx_hash", tx.Hash().Hex(), "owner", owner.Hex(), "amount", amount.String())
+	return c.waitTxMined(ctx, tx, "approve USDFC")
 }
 
 func (c *Client) waitTxMined(ctx context.Context, tx *types.Transaction, op string) error {
@@ -526,22 +578,22 @@ func (c *Client) waitTxMined(ctx context.Context, tx *types.Transaction, op stri
 }
 
 // PreparePayerForPayee tries to set operator approval and fund payer account.
-// It then verifies a native-FIL rail exists from payer -> payee.
+// It then verifies a token rail exists from payer -> payee.
 func (c *Client) PreparePayerForPayee(ctx context.Context, payer, payee common.Address, requiredWei *big.Int) error {
 	c.payInfo("prepare payer start", "payer", payer.Hex(), "payee", payee.Hex(), "required_wei", requiredWei.String())
 	if err := c.EnsureOperatorApproval(ctx, payer, payer); err != nil {
 		return err
 	}
-	if err := c.EnsurePayerFILBalance(ctx, payer, requiredWei); err != nil {
+	if err := c.EnsurePayerTokenBalance(ctx, payer, requiredWei); err != nil {
 		return err
 	}
-	railID, err := c.FindActiveFILRail(ctx, payer, payee)
+	railID, err := c.FindActiveTokenRail(ctx, payer, payee)
 	if err != nil {
 		c.payInfo("no active rail found; attempting createRail", "payer", payer.Hex(), "payee", payee.Hex(), "operator", c.signerAddr.Hex())
-		if _, createErr := c.CreateFILRail(ctx, payer, payee); createErr != nil {
+		if _, createErr := c.CreateTokenRail(ctx, payer, payee); createErr != nil {
 			return fmt.Errorf("filpay: createRail failed after approval+deposit: %w (initial rail check: %v)", createErr, err)
 		}
-		railID, err = c.FindActiveFILRail(ctx, payer, payee)
+		railID, err = c.FindActiveTokenRail(ctx, payer, payee)
 		if err != nil {
 			return fmt.Errorf("filpay: createRail submitted but rail still not visible yet (retry later): %w", err)
 		}
@@ -550,18 +602,18 @@ func (c *Client) PreparePayerForPayee(ctx context.Context, payer, payee common.A
 	return nil
 }
 
-// FindActiveFILRail returns a rail ID where payer pays payee in native FIL, rail not terminated and not past end epoch.
-func (c *Client) FindActiveFILRail(ctx context.Context, payer, payee common.Address) (*big.Int, error) {
+// FindActiveTokenRail returns a rail ID where payer pays payee in the correct token, rail not terminated and not past end epoch.
+func (c *Client) FindActiveTokenRail(ctx context.Context, payer, payee common.Address) (*big.Int, error) {
 	if payer == (common.Address{}) || payee == (common.Address{}) {
 		return nil, errors.New("filpay: empty payer or payee")
 	}
 	nowEp := synpayments.CurrentEpoch(c.chainID.Int64())
-	c.payInfo("searching native-FIL rails", "payer", payer.Hex(), "payee", payee.Hex(), "current_epoch", nowEp.String())
+	c.payInfo("searching token rails", "payer", payer.Hex(), "payee", payee.Hex(), "current_epoch", nowEp.String())
 	offset := big.NewInt(0)
 	limit := big.NewInt(100)
 	for {
 		c.payDebug("getRailsForPayerAndToken page", "offset", offset.String(), "limit", limit.String())
-		results, nextOff, total, err := c.payments.GetRailsForPayerAndToken(ctx, payer, filToken, offset, limit)
+		results, nextOff, total, err := c.payments.GetRailsForPayerAndToken(ctx, payer, c.paymentToken, offset, limit)
 		if err != nil {
 			return nil, fmt.Errorf("filpay: list rails: %w", err)
 		}
@@ -584,7 +636,7 @@ func (c *Client) FindActiveFILRail(ctx context.Context, payer, payee common.Addr
 				c.payDebug("skip rail (getRail failed)", "rail_id", ri.RailId.String(), "error", err.Error())
 				continue
 			}
-			if view.Token != filToken {
+			if view.Token != c.paymentToken {
 				c.payDebug("skip rail (wrong token)", "rail_id", ri.RailId.String(), "token", view.Token.Hex())
 				continue
 			}
@@ -597,7 +649,7 @@ func (c *Client) FindActiveFILRail(ctx context.Context, payer, payee common.Addr
 				c.payDebug("skip rail (past end epoch)", "rail_id", ri.RailId.String(), "end_epoch", view.EndEpoch.String())
 				continue
 			}
-			c.payInfo("selected active FIL rail", "rail_id", ri.RailId.String(),
+			c.payInfo("selected active token rail", "rail_id", ri.RailId.String(),
 				"from", view.From.Hex(), "to", view.To.Hex(),
 				"operator", view.Operator.Hex(), "settled_up_to", view.SettledUpTo.String(), "end_epoch", view.EndEpoch.String())
 			return ri.RailId, nil
@@ -607,8 +659,8 @@ func (c *Client) FindActiveFILRail(ctx context.Context, payer, payee common.Addr
 		}
 		offset = nextOff
 	}
-	c.payInfo("no matching FIL rail", "payer", payer.Hex(), "payee", payee.Hex())
-	return nil, fmt.Errorf("filpay: no active native-FIL rail from %s to %s", payer.Hex(), payee.Hex())
+	c.payInfo("no matching token rail", "payer", payer.Hex(), "payee", payee.Hex())
+	return nil, fmt.Errorf("filpay: no active token rail from %s to %s", payer.Hex(), payee.Hex())
 }
 
 // SettleIfFunded checks rail + payer balance, then submits settleRail through current epoch.
@@ -617,11 +669,11 @@ func (c *Client) SettleIfFunded(ctx context.Context, payer, payee common.Address
 		return "", errors.New("filpay: invalid price wei")
 	}
 	c.payInfo("SettleIfFunded start", "payer", payer.Hex(), "payee", payee.Hex(), "required_price_wei", priceWei.String())
-	railID, err := c.FindActiveFILRail(ctx, payer, payee)
+	railID, err := c.FindActiveTokenRail(ctx, payer, payee)
 	if err != nil {
 		return "", err
 	}
-	avail, err := c.PayerFILAvailable(ctx, payer)
+	avail, err := c.PayerTokenAvailable(ctx, payer)
 	if err != nil {
 		return "", err
 	}
@@ -654,13 +706,35 @@ func (c *Client) SettleIfFunded(ctx context.Context, payer, payee common.Address
 	h := tx.Hash().Hex()
 	c.payInfo("settleRail tx submitted", "tx_hash", h, "rail_id", railID.String())
 	if payee == c.signerAddr {
-		withdrawTx, amountWei, werr := c.WithdrawFILAvailable(ctx, payee)
+		withdrawTx, amountWei, werr := c.WithdrawTokenAvailable(ctx, payee)
 		if werr != nil {
 			return "", fmt.Errorf("filpay: settle ok but withdraw failed: %w", werr)
 		}
 		c.payInfo("withdraw after settle", "withdraw_tx", withdrawTx, "amount_wei", amountWei.String(), "owner", payee.Hex())
 	}
 	return h, nil
+}
+
+func resolvePaymentToken(chainID int64) (common.Address, error) {
+	if addr, ok := constants.USDFCAddressesByChainID[chainID]; ok && addr != (common.Address{}) {
+		return addr, nil
+	}
+	var net constants.Network
+	switch chainID {
+	case constants.ChainIDMainnet:
+		net = constants.NetworkMainnet
+	case constants.ChainIDCalibration:
+		net = constants.NetworkCalibration
+	case constants.ChainIDDevnet:
+		net = constants.NetworkDevnet
+	default:
+		return common.Address{}, fmt.Errorf("filpay: unknown USDFC token for chain %d", chainID)
+	}
+	addr := constants.USDFCAddresses[net]
+	if addr == (common.Address{}) {
+		return common.Address{}, fmt.Errorf("filpay: unknown USDFC token for chain %d", chainID)
+	}
+	return addr, nil
 }
 
 func resolvePaymentsAddress(raw string, chainID int64) common.Address {
