@@ -137,3 +137,35 @@ tasks:
       - docker rm -f paid-retrievals-nginx-piece >/dev/null 2>&1 || true
       - docker rmi nginx:stable-alpine >/dev/null 2>&1 || true
       - echo "nginx piece container stopped and image removed (if present)"
+
+  operator:bootstrap:
+    desc: Bootstrap operator environment
+    cmds:
+      - git submodule update --init --recursive
+
+  operator:build:
+    desc: Build operator binary
+    dir: operator
+    cmds:
+    - forge build
+
+  # When working on calibration best development flow is to deploy new contracts every time
+  # we change the contracts.
+  # When we move to mainnet we will upgrade existing contracts.
+  operator:deploy:calibnet:
+    desc: Deploy operator to Calibnet
+    dir: operator
+    cmds:
+    - just calibnet_deploy
+
+  operator:deploy:create:
+    desc: Create operator factory and operator beacon
+    dir: operator
+    env:
+      RPC_URL: https://api.calibration.node.glif.io/rpc/v1
+      # get this from the deployment artifact
+      CREATE_CONTRACT_ADDRESS: 0xD874D329a70FE5383f765FE9528D90f94915aCC9
+      # the key used to deploy the operator factory
+      PRIVATE_KEY: 0x16eb8fc4b66e8c509cd54f89f8479429743ce757ef853497457c84d1c40507a2
+    cmds:
+    - cast send --rpc-url $RPC_URL $CREATE_CONTRACT_ADDRESS "create()" --private-key $PRIVATE_KEY

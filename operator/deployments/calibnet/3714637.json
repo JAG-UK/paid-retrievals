@@ -1,0 +1,21 @@
+{
+  "FilecoinPay": "0x09a0fDc2723fAd1A7b8e3e00eE5DF73841df55a0",
+  "Operator": {
+    "beacon": "0x1C791D3424Cd3f244255cF8229f90f71c25fEb00",
+    "codeHash": "0x90cf737e6f6ebd7a7f55be6cab1c3000c99234520270793a488662c48c60bcf2",
+    "deployedCodeHash": "0x90cf737e6f6ebd7a7f55be6cab1c3000c99234520270793a488662c48c60bcf2",
+    "impl": "0xA88cAE0E49ce5373dFA5F6669158bf8650050659"
+  },
+  "OperatorBeacon": "0x1C791D3424Cd3f244255cF8229f90f71c25fEb00",
+  "OperatorFactory": {
+    "codeHash": "0x3595170e709190bef2c88d1b6fa2537a80c827df9e8b99f070ac537d4e212824",
+    "deployedCodeHash": "0x8c27c7751a714e5dcf545f4f9935686f1e5e89c4c1bf1ab91a154368acf8d354",
+    "impl": "0x9a712d8cE96a258de0D125b7CCB3B1EFf3160477",
+    "proxy": "0xD874D329a70FE5383f765FE9528D90f94915aCC9"
+  },
+  "Token": "0xb3042734b608a1B16e9e86B374A3f3e389B4cDf0",
+  "block": 3714637,
+  "chainId": 314159,
+  "deployer": "0x1Bb8222806C8F73049964635d579D9bFa3c9cbFA",
+  "timestamp": 1778765490
+}

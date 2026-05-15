@@ -1,0 +1,15 @@
+[submodule "operator/lib/filecoin-pay"]
+	path = operator/lib/filecoin-pay
+	url = https://github.com/FilOzone/filecoin-pay
+[submodule "operator/lib/filecoin-solidity"]
+	path = operator/lib/filecoin-solidity
+	url = https://github.com/filecoin-project/filecoin-solidity
+[submodule "operator/lib/openzeppelin-contracts-upgradeable"]
+	path = operator/lib/openzeppelin-contracts-upgradeable
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable
+[submodule "operator/lib/openzeppelin-contracts"]
+	path = operator/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+[submodule "operator/lib/forge-std"]
+	path = operator/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std

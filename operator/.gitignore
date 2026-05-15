@@ -1,0 +1,16 @@
+# Compiler files
+cache/
+out/
+
+# Ignores development broadcast logs
+/broadcast
+
+# Dotenv file
+.env
+
+lcov.info
+report/
+
+# Worktrees
+.worktrees/
+.worktree-links
