@@ -127,8 +127,9 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 			if err := os.MkdirAll(outDir, 0o755); err != nil {
 				return err
 			}
-			// TODO: The cli timeout is way too short for large datasets.
-			cli := &http.Client{Timeout: 120 * time.Second}
+			// We don't set a timeout for the client as download of a payload can take a very long time
+			// users can manually cancel if required
+			cli := &http.Client{}
 			discoverCli := &http.Client{Timeout: 90 * time.Second}
 			ctx := cmd.Context()
 			if ctx == nil {
