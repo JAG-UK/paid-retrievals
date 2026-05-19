@@ -33,8 +33,8 @@ func newTestStore(t *testing.T) *sqlitestore.Store {
 }
 
 func newTestHandler(cfg pp.Config) http.Handler {
-	if cfg.PriceFIL == "" {
-		cfg.PriceFIL = "0.01"
+	if cfg.PriceUSDFC == "" {
+		cfg.PriceUSDFC = "0.01"
 	}
 	if cfg.ClientQuery == "" {
 		cfg.ClientQuery = "client"
@@ -147,7 +147,7 @@ func TestQuoteThenPaidSuccess(t *testing.T) {
 	client := crypto.PubkeyToAddress(pk.PublicKey).Hex()
 	mock := &mockPaySettler{}
 	h := newTestHandler(pp.Config{
-		PriceFIL:     "0.1",
+		PriceUSDFC:   "0.1",
 		FilecoinPay:  mock,
 		QuotePayee0x: testQuotePayee0x,
 		Store:        s,
@@ -211,7 +211,7 @@ func TestReplayNonceRejected(t *testing.T) {
 	client := crypto.PubkeyToAddress(pk.PublicKey).Hex()
 	mock := &mockPaySettler{}
 	h := newTestHandler(pp.Config{
-		PriceFIL:     "0.1",
+		PriceUSDFC:   "0.1",
 		FilecoinPay:  mock,
 		QuotePayee0x: testQuotePayee0x,
 		Store:        s,

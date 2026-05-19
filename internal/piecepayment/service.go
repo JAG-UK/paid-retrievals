@@ -26,15 +26,15 @@ var ErrDealNotFound = errors.New("deal not found")
 var ErrReplayNonce = errors.New("nonce already used")
 
 type Deal struct {
-	DealUUID string
-	Client   string
-	CID      string
-	PriceFIL string
-	Payee0x  string
+	DealUUID   string
+	Client     string
+	CID        string
+	PriceUSDFC string
+	Payee0x    string
 }
 
 type DealStore interface {
-	InsertQuote(ctx context.Context, dealUUID, client, cid, priceFIL, payee0x string) error
+	InsertQuote(ctx context.Context, dealUUID, client, cid, priceUSDFC, payee0x string) error
 	GetDeal(ctx context.Context, dealUUID string) (*Deal, error)
 	ConsumeNonce(ctx context.Context, dealUUID, nonce string, expiresUnix int64) error
 	MarkPaid(ctx context.Context, dealUUID string) error
@@ -73,7 +73,7 @@ func (e *BadRequestError) Error() string {
 }
 
 type Config struct {
-	PriceFIL     string
+	PriceUSDFC   string
 	ClientQuery  string
 	ClientHeader string
 	MaxClockSkew time.Duration
@@ -108,11 +108,11 @@ func (s *RetrievalService) IssueQuote(r *http.Request, cid string) (*QuoteOutcom
 	}
 	dealID := uuid.NewString()
 	payee := strings.TrimSpace(s.cfg.QuotePayee0x)
-	if err := s.cfg.Store.InsertQuote(r.Context(), dealID, client, cid, s.cfg.PriceFIL, payee); err != nil {
+	if err := s.cfg.Store.InsertQuote(r.Context(), dealID, client, cid, s.cfg.PriceUSDFC, payee); err != nil {
 		s.logger.Error("failed to insert quote", "error", err, "deal_uuid", dealID, "client", client, "cid", cid)
 		return nil, fmt.Errorf("insert quote: %w", err)
 	}
-	return &QuoteOutcome{Challenge: buildChallenge(r.Host, dealID, cid, s.cfg.PriceFIL, payee)}, nil
+	return &QuoteOutcome{Challenge: buildChallenge(r.Host, dealID, cid, s.cfg.PriceUSDFC, payee)}, nil
 }
 
 func (s *RetrievalService) AuthorizeAndSettle(r *http.Request, cid, rawHdr string) (*PaidOutcome, error) {
@@ -139,13 +139,13 @@ func (s *RetrievalService) AuthorizeAndSettle(r *http.Request, cid, rawHdr strin
 		return nil, &PaymentRequiredError{Code: "invalid-challenge", Detail: "Challenge is unknown or expired"}
 	}
 	expectedReqB64, err := mpp.CanonicalRequestB64(mpp.PaymentRequest{
-		DealUUID: deal.DealUUID,
-		CID:      deal.CID,
-		PriceFIL: deal.PriceFIL,
-		Payee0x:  deal.Payee0x,
-		Method:   http.MethodGet,
-		Path:     "/piece/" + deal.CID,
-		Host:     r.Host,
+		DealUUID:   deal.DealUUID,
+		CID:        deal.CID,
+		PriceUSDFC: deal.PriceUSDFC,
+		Payee0x:    deal.Payee0x,
+		Method:     http.MethodGet,
+		Path:       "/piece/" + deal.CID,
+		Host:       r.Host,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("canonical request: %w", err)
@@ -165,7 +165,7 @@ func (s *RetrievalService) AuthorizeAndSettle(r *http.Request, cid, rawHdr strin
 	if err := verifier.Verify(hdr.ClientAddress, hdr.CanonicalMessage(), hdr.Signature); err != nil {
 		return nil, &PaymentRequiredError{Deal: deal, Code: "verification-failed", Detail: "Credential signature verification failed"}
 	}
-	priceWei, err := paymentheader.ParseFILToWei(deal.PriceFIL)
+	priceWei, err := paymentheader.ParseTokenToWei(deal.PriceUSDFC)
 	if err != nil {
 		return nil, fmt.Errorf("parse price fil: %w", err)
 	}
@@ -195,14 +195,14 @@ func issueChallengeForDeal(w http.ResponseWriter, r *http.Request, deal *Deal, l
 	if deal == nil {
 		return
 	}
-	challenge := buildChallenge(r.Host, deal.DealUUID, deal.CID, deal.PriceFIL, deal.Payee0x)
+	challenge := buildChallenge(r.Host, deal.DealUUID, deal.CID, deal.PriceUSDFC, deal.Payee0x)
 	if err := mpp.WritePaymentRequired(w, challenge); err != nil {
 		logger.Error("failed to write payment challenge", "deal_uuid", challenge.ID, "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
 }
 
-func buildChallenge(host, dealID, cid, priceFIL, payee string) mpp.Challenge {
+func buildChallenge(host, dealID, cid, priceUSDFC, payee string) mpp.Challenge {
 	return mpp.Challenge{
 		ID:          dealID,
 		Realm:       mpp.RealmPrefix + host,
@@ -214,13 +214,13 @@ func buildChallenge(host, dealID, cid, priceFIL, payee string) mpp.Challenge {
 			"cid":       cid,
 		},
 		Request: mpp.PaymentRequest{
-			DealUUID: dealID,
-			CID:      cid,
-			PriceFIL: priceFIL,
-			Payee0x:  payee,
-			Method:   http.MethodGet,
-			Path:     "/piece/" + cid,
-			Host:     host,
+			DealUUID:   dealID,
+			CID:        cid,
+			PriceUSDFC: priceUSDFC,
+			Payee0x:    payee,
+			Method:     http.MethodGet,
+			Path:       "/piece/" + cid,
+			Host:       host,
 		},
 		Expires: time.Now().Add(challengeTTL).UTC().Format(time.RFC3339),
 	}

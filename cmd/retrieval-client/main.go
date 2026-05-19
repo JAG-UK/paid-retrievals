@@ -42,14 +42,14 @@ type problemDetails struct {
 }
 
 type challengeItem struct {
-	CID       string
-	Base      *url.URL
-	Free      bool
-	SavedPath string
-	DealUUID  string
-	PriceFIL  string
-	Payee0x   string
-	Challenge mpp.Challenge
+	CID        string
+	Base       *url.URL
+	Free       bool
+	SavedPath  string
+	DealUUID   string
+	PriceUSDFC string
+	Payee0x    string
+	Challenge  mpp.Challenge
 }
 
 func main() {
@@ -184,13 +184,13 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 					return fmt.Errorf("dataset incomplete: no usable source for CID %s: %w", cid, err)
 				}
 				if payDebug && !sel.Free && strings.TrimSpace(sel.Payee0x) != "" {
-					payClientLog("selected payee_0x=%s (fund/open native-FIL rail payer=client → payee); SP settles on paid GET", sel.Payee0x)
+					payClientLog("selected payee_0x=%s (fund/open rail payer=client → payee); SP settles on paid GET", sel.Payee0x)
 				}
 				if verbose {
 					if sel.Free {
 						fmt.Printf("    free CAR from %s -> %s\n", sel.Base.String(), sel.SavedPath)
 					} else {
-						line := fmt.Sprintf("    selected %s — CID %s costs %s FIL (deal %s)", sel.Base.String(), cid, sel.PriceFIL, sel.DealUUID)
+						line := fmt.Sprintf("    selected %s — CID %s costs %s USDFC (deal %s)", sel.Base.String(), cid, sel.PriceUSDFC, sel.DealUUID)
 						if strings.TrimSpace(sel.Payee0x) != "" {
 							line += fmt.Sprintf(" payee_0x=%s", sel.Payee0x)
 						}
@@ -198,14 +198,14 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 					}
 				}
 				items = append(items, challengeItem{
-					CID:       cid,
-					Base:      sel.Base,
-					Free:      sel.Free,
-					SavedPath: sel.SavedPath,
-					DealUUID:  sel.DealUUID,
-					PriceFIL:  sel.PriceFIL,
-					Payee0x:   strings.TrimSpace(sel.Payee0x),
-					Challenge: sel.Challenge,
+					CID:        cid,
+					Base:       sel.Base,
+					Free:       sel.Free,
+					SavedPath:  sel.SavedPath,
+					DealUUID:   sel.DealUUID,
+					PriceUSDFC: sel.PriceUSDFC,
+					Payee0x:    strings.TrimSpace(sel.Payee0x),
+					Challenge:  sel.Challenge,
 				})
 			}
 
@@ -214,13 +214,13 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 				if it.Free {
 					continue
 				}
-				prices = append(prices, it.PriceFIL)
+				prices = append(prices, it.PriceUSDFC)
 			}
-			total, err := sumFILValues(prices)
+			total, err := sumTokenValues(prices)
 			if err != nil {
-				return fmt.Errorf("sum FIL values: %w", err)
+				return fmt.Errorf("sum token values: %w", err)
 			}
-			fmt.Printf("Total required amount: %s FIL for %d piece(s).\n", total, len(items))
+			fmt.Printf("Total required amount: %s USDFC for %d piece(s).\n", total, len(items))
 
 			var filpayLogger *slog.Logger
 			if payDebug || verbose {
@@ -353,7 +353,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 		cids               []string
 		cidFile            string
 		payees             []string
-		requiredFIL        string
+		requiredUSDFC      string
 		payDebug           bool
 		payRPCURL          string
 		payPaymentsAddress string
@@ -449,22 +449,22 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 						continue
 					}
 					challenges = append(challenges, challengeItem{
-						CID:       cid,
-						Base:      sel.Base,
-						Free:      false,
-						DealUUID:  sel.DealUUID,
-						PriceFIL:  sel.PriceFIL,
-						Payee0x:   strings.TrimSpace(sel.Payee0x),
-						Challenge: sel.Challenge,
+						CID:        cid,
+						Base:       sel.Base,
+						Free:       false,
+						DealUUID:   sel.DealUUID,
+						PriceUSDFC: sel.PriceUSDFC,
+						Payee0x:    strings.TrimSpace(sel.Payee0x),
+						Challenge:  sel.Challenge,
 					})
 				}
 			}
 
 			byPayeeRequired := map[string]*big.Int{}
-			if strings.TrimSpace(requiredFIL) != "" {
-				reqWei, err := paymentheader.ParseFILToWei(requiredFIL)
+			if strings.TrimSpace(requiredUSDFC) != "" {
+				reqWei, err := paymentheader.ParseTokenToWei(requiredUSDFC)
 				if err != nil {
-					return fmt.Errorf("invalid --required-fil %q: %w", requiredFIL, err)
+					return fmt.Errorf("invalid --required-fil %q: %w", requiredUSDFC, err)
 				}
 				for _, p := range payees {
 					if !common.IsHexAddress(strings.TrimSpace(p)) {
@@ -477,9 +477,9 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 				if !common.IsHexAddress(strings.TrimSpace(q.Payee0x)) {
 					return fmt.Errorf("challenge cid=%s deal=%s has invalid payee_0x %q", q.CID, q.DealUUID, q.Payee0x)
 				}
-				w, err := paymentheader.ParseFILToWei(q.PriceFIL)
+				w, err := paymentheader.ParseTokenToWei(q.PriceUSDFC)
 				if err != nil {
-					return fmt.Errorf("challenge cid=%s deal=%s has bad price %q: %w", q.CID, q.DealUUID, q.PriceFIL, err)
+					return fmt.Errorf("challenge cid=%s deal=%s has bad price %q: %w", q.CID, q.DealUUID, q.PriceUSDFC, err)
 				}
 				key := common.HexToAddress(strings.TrimSpace(q.Payee0x)).Hex()
 				if byPayeeRequired[key] == nil {
@@ -502,7 +502,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 			if len(challenges) > 0 {
 				fmt.Println("\nChallenge details:")
 				for _, q := range challenges {
-					fmt.Printf("- cid=%s deal=%s price_fil=%s payee_0x=%s\n", q.CID, q.DealUUID, q.PriceFIL, q.Payee0x)
+					fmt.Printf("- cid=%s deal=%s price_fil=%s payee_0x=%s\n", q.CID, q.DealUUID, q.PriceUSDFC, q.Payee0x)
 				}
 			}
 
@@ -511,7 +511,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Println("\nPayer account (native FIL token=0x0):")
+			fmt.Println("\nPayer account:")
 			fmt.Printf("- funded_until_epoch=%s\n", fundedUntil.String())
 			fmt.Printf("- current_funds_wei=%s\n", currentFunds.String())
 			fmt.Printf("- available_funds_wei=%s\n", availableFunds.String())
@@ -521,7 +521,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("\nAll payer FIL rails: %d\n", len(rails))
+			fmt.Printf("\nAll payer rails: %d\n", len(rails))
 			for _, r := range rails {
 				settled := "n/a"
 				if r.SettledUpTo != nil {
@@ -575,7 +575,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 	c.Flags().StringArrayVar(&cids, "cid", nil, "CID to probe for payee discovery (repeatable)")
 	c.Flags().StringVar(&cidFile, "cid-file", "", "File with CIDs for payee discovery via MPP (newline/comma separated)")
 	c.Flags().StringArrayVar(&payees, "payee", nil, "Explicit payee 0x address to check (repeatable)")
-	c.Flags().StringVar(&requiredFIL, "required-fil", "", "Optional required FIL amount per --payee when no challenges are used")
+	c.Flags().StringVar(&requiredUSDFC, "required-usdfc", "", "Optional required USDFC amount per --payee when no challenges are used")
 	c.Flags().BoolVar(&payDebug, "pay-debug", false, "Enable detailed probe logs while discovering payees from challenges")
 	c.Flags().StringVar(&payRPCURL, "pay-rpc-url", getenv("SP_PROXY_PAY_RPC_URL", "https://api.calibration.node.glif.io/rpc/v1"), "Filecoin JSON-RPC URL: FVM payments + Lotus StateMinerInfo for discovery")
 	c.Flags().StringVar(&payPaymentsAddress, "pay-payments-address", getenv("SP_PROXY_PAY_PAYMENTS_ADDRESS", ""), "Filecoin Pay payments contract (0x); empty uses chain default")
@@ -610,9 +610,9 @@ func prepareRailsForChallenges(ctx context.Context, fc *filpay.Client, client st
 		if strings.TrimSpace(it.Payee0x) == "" || !common.IsHexAddress(it.Payee0x) {
 			return fmt.Errorf("challenge %s for cid=%s missing valid payee_0x", it.DealUUID, it.CID)
 		}
-		priceWei, err := paymentheader.ParseFILToWei(it.PriceFIL)
+		priceWei, err := paymentheader.ParseTokenToWei(it.PriceUSDFC)
 		if err != nil {
-			return fmt.Errorf("challenge %s has invalid price_fil=%q: %w", it.DealUUID, it.PriceFIL, err)
+			return fmt.Errorf("challenge %s has invalid price_fil=%q: %w", it.DealUUID, it.PriceUSDFC, err)
 		}
 		key := common.HexToAddress(it.Payee0x).Hex()
 		if byPayee[key] == nil {
@@ -677,9 +677,9 @@ func chargeRailsForChallenges(ctx context.Context, fc *filpay.Client, client str
 		if strings.TrimSpace(it.Payee0x) == "" || !common.IsHexAddress(it.Payee0x) {
 			return fmt.Errorf("challenge %s for cid=%s missing valid payee_0x", it.DealUUID, it.CID)
 		}
-		priceWei, err := paymentheader.ParseFILToWei(it.PriceFIL)
+		priceWei, err := paymentheader.ParseTokenToWei(it.PriceUSDFC)
 		if err != nil {
-			return fmt.Errorf("challenge %s has invalid price_fil=%q: %w", it.DealUUID, it.PriceFIL, err)
+			return fmt.Errorf("challenge %s has invalid price_fil=%q: %w", it.DealUUID, it.PriceUSDFC, err)
 		}
 		key := common.HexToAddress(it.Payee0x).Hex()
 		if byPayee[key] == nil {
@@ -850,13 +850,13 @@ func getenv(key, fallback string) string {
 	return v
 }
 
-func sumFILValues(prices []string) (string, error) {
+func sumTokenValues(prices []string) (string, error) {
 	var total float64
 	for _, price := range prices {
 		var x float64
 		_, err := fmt.Sscanf(price, "%f", &x)
 		if err != nil {
-			return "0", fmt.Errorf("parse FIL value %q: %w", price, err)
+			return "0", fmt.Errorf("parse token value %q: %w", price, err)
 		}
 		total += x
 	}

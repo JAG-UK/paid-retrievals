@@ -33,7 +33,7 @@ func root() *cobra.Command {
 	var (
 		listen       string
 		dbPath       string
-		priceFIL     string
+		priceUSDFC   string
 		clientQuery  string
 		clientHeader string
 		maxSkewSec   int
@@ -100,7 +100,7 @@ func root() *cobra.Command {
 			}
 
 			config := piecepayment.Config{
-				PriceFIL:     priceFIL,
+				PriceUSDFC:   priceUSDFC,
 				ClientQuery:  clientQuery,
 				ClientHeader: clientHeader,
 				MaxClockSkew: time.Duration(maxSkewSec) * time.Second,
@@ -139,13 +139,13 @@ func root() *cobra.Command {
 				http.NotFound(w, r)
 			})
 
-			logger.Info("sp-proxy listening", "listen", listen, "db", dbPath, "price_fil", priceFIL, "verbose", verbose)
+			logger.Info("sp-proxy listening", "listen", listen, "db", dbPath, "price_fil", priceUSDFC, "verbose", verbose)
 			return http.ListenAndServe(listen, h)
 		},
 	}
 	c.Flags().StringVar(&listen, "listen", ":8787", "Listen address")
 	c.Flags().StringVar(&dbPath, "db", "./sp-proxy.db", "SQLite deals database path")
-	c.Flags().StringVar(&priceFIL, "price-fil", "0.01", "Challenge price (FIL) per requested CID")
+	c.Flags().StringVar(&priceUSDFC, "price-usdfc", "0.01", "Challenge price (USDFC) per requested CID")
 	c.Flags().StringVar(&clientQuery, "client-query", "client", "Query key used to identify client on challenge requests")
 	c.Flags().StringVar(&clientHeader, "client-header", "X-Client-Address", "Header key used to identify client on challenge requests")
 	c.Flags().IntVar(&maxSkewSec, "max-clock-skew-sec", 30, "Allowed clock skew in seconds for header expiry")

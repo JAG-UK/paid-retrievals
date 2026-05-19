@@ -176,8 +176,8 @@ func BuildQuoteFingerprint(dealHint string, pieces []string) string {
 	return crypto.Keccak256Hash(b.Bytes()).Hex()
 }
 
-// ParseFILToWei parses a decimal FIL string like "1.5" into wei (18 decimals).
-func ParseFILToWei(fil string) (*big.Int, error) {
+// ParseTokenToWei parses a decimal token value string like "1.5" into wei (18 decimals).
+func ParseTokenToWei(fil string) (*big.Int, error) {
 	fil = strings.TrimSpace(fil)
 	if fil == "" {
 		return nil, errors.New("empty amount")
@@ -213,8 +213,8 @@ func WeiString(w *big.Int) string {
 	return w.String()
 }
 
-// FormatFIL approximates FIL from wei for display (not for chain submission).
-func FormatFIL(wei *big.Int) string {
+// FormatToken approximates token value from wei for display (not for chain submission).
+func FormatTokenValue(wei *big.Int) string {
 	if wei == nil {
 		return "0"
 	}
@@ -243,14 +243,14 @@ func EstimateStubPriceWei(perPieceWei *big.Int, pieceCount int) *big.Int {
 	return new(big.Int).Mul(perPieceWei, big.NewInt(int64(pieceCount)))
 }
 
-// ParsePerPieceWei parses wei from a flag like "1000000000000000" or "0.001" FIL.
+// ParsePerPieceWei parses wei from a flag like "1000000000000000" or "0.001" USDFC.
 func ParsePerPieceWei(s string) (*big.Int, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return big.NewInt(0), nil
 	}
 	if strings.Contains(s, ".") {
-		return ParseFILToWei(s)
+		return ParseTokenToWei(s)
 	}
 	v, ok := new(big.Int).SetString(s, 10)
 	if !ok {

@@ -72,12 +72,12 @@ func (s *Store) migrate() error {
 	return nil
 }
 
-func (s *Store) InsertQuote(ctx context.Context, dealUUID, client, cid, priceFIL, payee0x string) error {
+func (s *Store) InsertQuote(ctx context.Context, dealUUID, client, cid, priceUSDFC, payee0x string) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO deals(deal_uuid, client, cid, price_fil, payee_0x, created_at, last_quoted_at, quoted_seen)
 		VALUES(?,?,?,?,?,?,?,1)
-	`, dealUUID, client, cid, priceFIL, payee0x, now, now)
+	`, dealUUID, client, cid, priceUSDFC, payee0x, now, now)
 	return err
 }
 
@@ -87,7 +87,7 @@ func (s *Store) GetDeal(ctx context.Context, dealUUID string) (*piecepayment.Dea
 		SELECT deal_uuid, client, cid, price_fil, COALESCE(payee_0x, '')
 		FROM deals WHERE deal_uuid = ?
 	`, dealUUID).Scan(
-		&d.DealUUID, &d.Client, &d.CID, &d.PriceFIL, &d.Payee0x,
+		&d.DealUUID, &d.Client, &d.CID, &d.PriceUSDFC, &d.Payee0x,
 	)
 	if err == sql.ErrNoRows {
 		return nil, piecepayment.ErrDealNotFound

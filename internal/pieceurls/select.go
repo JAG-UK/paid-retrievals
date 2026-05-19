@@ -27,9 +27,9 @@ type Selection struct {
 	Free      bool
 	SavedPath string
 
-	DealUUID string
-	PriceFIL string
-	Payee0x  string
+	DealUUID   string
+	PriceUSDFC string
+	Payee0x    string
 	// Challenge is set for paid (402) selections; parsed from WWW-Authenticate (MPP).
 	Challenge mpp.Challenge
 }
@@ -78,7 +78,7 @@ func SelectBestPieceSource(ctx context.Context, cli *http.Client, pieceCID, clie
 
 			mu.Lock()
 			defer mu.Unlock()
-			w, err := paymentheader.ParseFILToWei(sel.PriceFIL)
+			w, err := paymentheader.ParseTokenToWei(sel.PriceUSDFC)
 			if err != nil {
 				return
 			}
@@ -189,23 +189,23 @@ func probePieceEndpoint(ctx context.Context, cli *http.Client, base *url.URL, ci
 			}
 			return nil, err
 		}
-		if ch.Request.DealUUID == "" || ch.Request.PriceFIL == "" {
+		if ch.Request.DealUUID == "" || ch.Request.PriceUSDFC == "" {
 			if log != nil {
 				log("probe 402 challenge OK cid=%s base=%s: invalid MPP challenge request", cid, base.String())
 			}
 			return nil, errors.New("invalid MPP challenge payload")
 		}
 		if log != nil {
-			log("challenge OK payment={id:%s deal_uuid:%s cid:%s price_fil:%s payee_0x:%q}", ch.ID, ch.Request.DealUUID, ch.Request.CID, ch.Request.PriceFIL, ch.Request.Payee0x)
+			log("challenge OK payment={id:%s deal_uuid:%s cid:%s price_fil:%s payee_0x:%q}", ch.ID, ch.Request.DealUUID, ch.Request.CID, ch.Request.PriceUSDFC, ch.Request.Payee0x)
 		}
 		return &Selection{
-			Base:      cloneURLBase(base),
-			CID:       cid,
-			Free:      false,
-			DealUUID:  ch.Request.DealUUID,
-			PriceFIL:  ch.Request.PriceFIL,
-			Payee0x:   strings.TrimSpace(ch.Request.Payee0x),
-			Challenge: *ch,
+			Base:       cloneURLBase(base),
+			CID:        cid,
+			Free:       false,
+			DealUUID:   ch.Request.DealUUID,
+			PriceUSDFC: ch.Request.PriceUSDFC,
+			Payee0x:    strings.TrimSpace(ch.Request.Payee0x),
+			Challenge:  *ch,
 		}, nil
 
 	default:

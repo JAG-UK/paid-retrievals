@@ -26,13 +26,13 @@ func mpp402Handler(cid, dealUUID, price, payee string) http.HandlerFunc {
 			Intent:      mpp.IntentID,
 			Description: "test",
 			Request: mpp.PaymentRequest{
-				DealUUID: dealUUID,
-				CID:      cid,
-				PriceFIL: price,
-				Payee0x:  payee,
-				Method:   http.MethodGet,
-				Path:     "/piece/" + cid,
-				Host:     r.Host,
+				DealUUID:   dealUUID,
+				CID:        cid,
+				PriceUSDFC: price,
+				Payee0x:    payee,
+				Method:     http.MethodGet,
+				Path:       "/piece/" + cid,
+				Host:       r.Host,
 			},
 			Expires: time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		}
@@ -73,8 +73,8 @@ func TestSelectBestPieceSource_Cheapest402(t *testing.T) {
 	if sel.Free {
 		t.Fatalf("expected paid selection, got free")
 	}
-	if sel.PriceFIL != "0.01" {
-		t.Fatalf("expected cheapest price 0.01, got %q", sel.PriceFIL)
+	if sel.PriceUSDFC != "0.01" {
+		t.Fatalf("expected cheapest price 0.01, got %q", sel.PriceUSDFC)
 	}
 	if sel.Base.Host != uLow.Host {
 		t.Fatalf("expected base %s, got %s", uLow.Host, sel.Base.Host)
