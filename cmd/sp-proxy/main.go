@@ -139,7 +139,7 @@ func root() *cobra.Command {
 				http.NotFound(w, r)
 			})
 
-			logger.Info("sp-proxy listening", "listen", listen, "db", dbPath, "price_fil", priceUSDFC, "verbose", verbose)
+			logger.Info("sp-proxy listening", "listen", listen, "db", dbPath, "price_usdfc", priceUSDFC, "verbose", verbose)
 			return http.ListenAndServe(listen, h)
 		},
 	}

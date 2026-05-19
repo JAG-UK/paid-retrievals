@@ -281,8 +281,8 @@ func (c *Client) PayerTokenAvailable(ctx context.Context, payer common.Address) 
 	if err != nil {
 		return nil, fmt.Errorf("filpay: getAccountInfoIfSettled: %w", err)
 	}
-	c.payInfo("payer token available (wei)", "payer", payer.Hex(), "available_wei", avail.String())
-	c.payDebug("payer token available detail", "payer", payer.Hex(), "available_wei", avail.String())
+	c.payInfo("payer token available (base units)", "payer", payer.Hex(), "available_base_units", avail.String())
+	c.payDebug("payer token available detail", "payer", payer.Hex(), "available_base_units", avail.String())
 	return avail, nil
 }
 
@@ -353,15 +353,15 @@ func (c *Client) CreateTokenRail(ctx context.Context, payer, payee common.Addres
 
 // ChargeRailOneTime applies a one-time payment on the active rail.
 // Requires signer to be the rail operator.
-func (c *Client) ChargeRailOneTime(ctx context.Context, payer, payee common.Address, amountWei *big.Int) (string, error) {
-	if amountWei == nil || amountWei.Sign() <= 0 {
+func (c *Client) ChargeRailOneTime(ctx context.Context, payer, payee common.Address, amountBaseUnits *big.Int) (string, error) {
+	if amountBaseUnits == nil || amountBaseUnits.Sign() <= 0 {
 		return "", errors.New("filpay: invalid one-time amount")
 	}
 	railID, err := c.FindActiveTokenRail(ctx, payer, payee)
 	if err != nil {
 		return "", err
 	}
-	if err := c.EnsureRailLockup(ctx, railID, amountWei); err != nil {
+	if err := c.EnsureRailLockup(ctx, railID, amountBaseUnits); err != nil {
 		return "", err
 	}
 	parsed, err := abi.JSON(strings.NewReader(modifyRailPaymentABIJSON))
@@ -374,13 +374,13 @@ func (c *Client) ChargeRailOneTime(ctx context.Context, payer, payee common.Addr
 		return "", fmt.Errorf("filpay: transactor: %w", err)
 	}
 	opts.Context = ctx
-	c.payInfo("submitting modifyRailPayment one-time charge", "rail_id", railID.String(), "payer", payer.Hex(), "payee", payee.Hex(), "one_time_payment_wei", amountWei.String())
-	tx, err := bound.Transact(opts, "modifyRailPayment", railID, big.NewInt(0), amountWei)
+	c.payInfo("submitting modifyRailPayment one-time charge", "rail_id", railID.String(), "payer", payer.Hex(), "payee", payee.Hex(), "one_time_payment_base_units", amountBaseUnits.String())
+	tx, err := bound.Transact(opts, "modifyRailPayment", railID, big.NewInt(0), amountBaseUnits)
 	if err != nil {
 		return "", fmt.Errorf("filpay: modifyRailPayment: %w", err)
 	}
 	h := tx.Hash().Hex()
-	c.payInfo("modifyRailPayment tx submitted", "tx_hash", h, "rail_id", railID.String(), "one_time_payment_wei", amountWei.String())
+	c.payInfo("modifyRailPayment tx submitted", "tx_hash", h, "rail_id", railID.String(), "one_time_payment_base_units", amountBaseUnits.String())
 	if err := c.waitTxMined(ctx, tx, "modifyRailPayment"); err != nil {
 		return "", err
 	}
@@ -389,11 +389,11 @@ func (c *Client) ChargeRailOneTime(ctx context.Context, payer, payee common.Addr
 
 // EnsureRailLockup sets fixed lockup to at least required amount (with zero lockup period).
 // Requires signer to be rail operator.
-func (c *Client) EnsureRailLockup(ctx context.Context, railID, requiredWei *big.Int) error {
+func (c *Client) EnsureRailLockup(ctx context.Context, railID, requiredBaseUnits *big.Int) error {
 	if railID == nil || railID.Sign() <= 0 {
 		return errors.New("filpay: invalid rail id")
 	}
-	if requiredWei == nil || requiredWei.Sign() <= 0 {
+	if requiredBaseUnits == nil || requiredBaseUnits.Sign() <= 0 {
 		return errors.New("filpay: invalid required lockup amount")
 	}
 	view, err := c.payments.GetRail(ctx, railID)
@@ -407,8 +407,8 @@ func (c *Client) EnsureRailLockup(ctx context.Context, railID, requiredWei *big.
 	if view.LockupFixed != nil {
 		currentFixed = new(big.Int).Set(view.LockupFixed)
 	}
-	if currentFixed.Cmp(requiredWei) >= 0 {
-		c.payInfo("rail lockup already sufficient", "rail_id", railID.String(), "lockup_fixed_wei", currentFixed.String(), "required_wei", requiredWei.String())
+	if currentFixed.Cmp(requiredBaseUnits) >= 0 {
+		c.payInfo("rail lockup already sufficient", "rail_id", railID.String(), "lockup_fixed_base_units", currentFixed.String(), "required_base_units", requiredBaseUnits.String())
 		return nil
 	}
 	parsed, err := abi.JSON(strings.NewReader(modifyRailLockupABIJSON))
@@ -422,8 +422,8 @@ func (c *Client) EnsureRailLockup(ctx context.Context, railID, requiredWei *big.
 	}
 	opts.Context = ctx
 	period := big.NewInt(0)
-	c.payInfo("submitting modifyRailLockup", "rail_id", railID.String(), "old_lockup_fixed_wei", currentFixed.String(), "new_lockup_fixed_wei", requiredWei.String(), "period", period.String())
-	tx, err := bound.Transact(opts, "modifyRailLockup", railID, period, requiredWei)
+	c.payInfo("submitting modifyRailLockup", "rail_id", railID.String(), "old_lockup_fixed_base_units", currentFixed.String(), "new_lockup_fixed_base_units", requiredBaseUnits.String(), "period", period.String())
+	tx, err := bound.Transact(opts, "modifyRailLockup", railID, period, requiredBaseUnits)
 	if err != nil {
 		return fmt.Errorf("filpay: modifyRailLockup: %w", err)
 	}
@@ -436,7 +436,7 @@ func (c *Client) EnsureRailLockup(ctx context.Context, railID, requiredWei *big.
 
 // WithdrawTokenAvailable withdraws available tokens from owner's payments account to owner's wallet.
 // Requires owner == signer.
-func (c *Client) WithdrawTokenAvailable(ctx context.Context, owner common.Address) (txHash string, amountWei *big.Int, err error) {
+func (c *Client) WithdrawTokenAvailable(ctx context.Context, owner common.Address) (txHash string, amountBaseUnits *big.Int, err error) {
 	if owner != c.signerAddr {
 		return "", nil, fmt.Errorf("filpay: owner %s does not match signer %s for withdraw", owner.Hex(), c.signerAddr.Hex())
 	}
@@ -458,13 +458,13 @@ func (c *Client) WithdrawTokenAvailable(ctx context.Context, owner common.Addres
 		return "", nil, fmt.Errorf("filpay: transactor: %w", err)
 	}
 	opts.Context = ctx
-	c.payInfo("submitting token withdraw", "owner", owner.Hex(), "amount_wei", avail.String())
+	c.payInfo("submitting token withdraw", "owner", owner.Hex(), "amount_base_units", avail.String())
 	tx, err := bound.Transact(opts, "withdraw", c.paymentToken, avail)
 	if err != nil {
 		return "", nil, fmt.Errorf("filpay: withdraw: %w", err)
 	}
 	h := tx.Hash().Hex()
-	c.payInfo("withdraw tx submitted", "tx_hash", h, "owner", owner.Hex(), "amount_wei", avail.String())
+	c.payInfo("withdraw tx submitted", "tx_hash", h, "owner", owner.Hex(), "amount_base_units", avail.String())
 	if err := c.waitTxMined(ctx, tx, "withdraw"); err != nil {
 		return "", nil, err
 	}
@@ -472,22 +472,22 @@ func (c *Client) WithdrawTokenAvailable(ctx context.Context, owner common.Addres
 }
 
 // EnsurePayerTokenBalance deposits missing USDFC into the payer's Filecoin Pay account.
-func (c *Client) EnsurePayerTokenBalance(ctx context.Context, payer common.Address, requiredWei *big.Int) error {
-	if requiredWei == nil || requiredWei.Sign() <= 0 {
+func (c *Client) EnsurePayerTokenBalance(ctx context.Context, payer common.Address, requiredBaseUnits *big.Int) error {
+	if requiredBaseUnits == nil || requiredBaseUnits.Sign() <= 0 {
 		return errors.New("filpay: invalid required payment amount")
 	}
 	avail, err := c.PayerTokenAvailable(ctx, payer)
 	if err != nil {
 		return err
 	}
-	if avail.Cmp(requiredWei) >= 0 {
-		c.payInfo("payer USDFC balance already sufficient", "payer", payer.Hex(), "available_wei", avail.String(), "required_wei", requiredWei.String())
+	if avail.Cmp(requiredBaseUnits) >= 0 {
+		c.payInfo("payer USDFC balance already sufficient", "payer", payer.Hex(), "available_base_units", avail.String(), "required_base_units", requiredBaseUnits.String())
 		return nil
 	}
 	if payer != c.signerAddr {
 		return fmt.Errorf("filpay: payer %s does not match signer %s for deposit", payer.Hex(), c.signerAddr.Hex())
 	}
-	deficit := new(big.Int).Sub(requiredWei, avail)
+	deficit := new(big.Int).Sub(requiredBaseUnits, avail)
 
 	usdfc, err := contracts.NewERC20Contract(c.paymentToken, c.eth)
 	if err != nil {
@@ -505,8 +505,8 @@ func (c *Client) EnsurePayerTokenBalance(ctx context.Context, payer common.Addre
 		return err
 	}
 
-	c.payInfo("submitting USDFC deposit", "payer", payer.Hex(), "token", c.paymentToken.Hex(), "deposit_wei", deficit.String(),
-		"available_wei_before", avail.String(), "required_wei", requiredWei.String())
+	c.payInfo("submitting USDFC deposit", "payer", payer.Hex(), "token", c.paymentToken.Hex(), "deposit_base_units", deficit.String(),
+		"available_base_units_before", avail.String(), "required_base_units", requiredBaseUnits.String())
 	opts, err := bind.NewKeyedTransactorWithChainID(c.signerKey, c.chainID)
 	if err != nil {
 		return fmt.Errorf("filpay: transactor: %w", err)
@@ -517,7 +517,7 @@ func (c *Client) EnsurePayerTokenBalance(ctx context.Context, payer common.Addre
 	if err != nil {
 		return fmt.Errorf("filpay: deposit USDFC: %w", err)
 	}
-	c.payInfo("deposit tx submitted", "tx_hash", tx.Hash().Hex(), "payer", payer.Hex(), "deposit_wei", deficit.String())
+	c.payInfo("deposit tx submitted", "tx_hash", tx.Hash().Hex(), "payer", payer.Hex(), "deposit_base_units", deficit.String())
 	if err := c.waitTxMined(ctx, tx, "deposit"); err != nil {
 		return err
 	}
@@ -579,12 +579,12 @@ func (c *Client) waitTxMined(ctx context.Context, tx *types.Transaction, op stri
 
 // PreparePayerForPayee tries to set operator approval and fund payer account.
 // It then verifies a token rail exists from payer -> payee.
-func (c *Client) PreparePayerForPayee(ctx context.Context, payer, payee common.Address, requiredWei *big.Int) error {
-	c.payInfo("prepare payer start", "payer", payer.Hex(), "payee", payee.Hex(), "required_wei", requiredWei.String())
+func (c *Client) PreparePayerForPayee(ctx context.Context, payer, payee common.Address, requiredBaseUnits *big.Int) error {
+	c.payInfo("prepare payer start", "payer", payer.Hex(), "payee", payee.Hex(), "required_base_units", requiredBaseUnits.String())
 	if err := c.EnsureOperatorApproval(ctx, payer, payer); err != nil {
 		return err
 	}
-	if err := c.EnsurePayerTokenBalance(ctx, payer, requiredWei); err != nil {
+	if err := c.EnsurePayerTokenBalance(ctx, payer, requiredBaseUnits); err != nil {
 		return err
 	}
 	railID, err := c.FindActiveTokenRail(ctx, payer, payee)
@@ -664,11 +664,11 @@ func (c *Client) FindActiveTokenRail(ctx context.Context, payer, payee common.Ad
 }
 
 // SettleIfFunded checks rail + payer balance, then submits settleRail through current epoch.
-func (c *Client) SettleIfFunded(ctx context.Context, payer, payee common.Address, priceWei *big.Int) (txHash string, err error) {
-	if priceWei == nil || priceWei.Sign() <= 0 {
-		return "", errors.New("filpay: invalid price wei")
+func (c *Client) SettleIfFunded(ctx context.Context, payer, payee common.Address, priceBaseUnits *big.Int) (txHash string, err error) {
+	if priceBaseUnits == nil || priceBaseUnits.Sign() <= 0 {
+		return "", errors.New("filpay: invalid price base units")
 	}
-	c.payInfo("SettleIfFunded start", "payer", payer.Hex(), "payee", payee.Hex(), "required_price_wei", priceWei.String())
+	c.payInfo("SettleIfFunded start", "payer", payer.Hex(), "payee", payee.Hex(), "required_price_base_units", priceBaseUnits.String())
 	railID, err := c.FindActiveTokenRail(ctx, payer, payee)
 	if err != nil {
 		return "", err
@@ -677,10 +677,10 @@ func (c *Client) SettleIfFunded(ctx context.Context, payer, payee common.Address
 	if err != nil {
 		return "", err
 	}
-	if avail.Cmp(priceWei) < 0 {
-		c.payInfo("payer balance below quoted price; proceeding to settleRail", "available_wei", avail.String(), "quoted_required_wei", priceWei.String())
+	if avail.Cmp(priceBaseUnits) < 0 {
+		c.payInfo("payer balance below quoted price; proceeding to settleRail", "available_base_units", avail.String(), "quoted_required_base_units", priceBaseUnits.String())
 	} else {
-		c.payInfo("balance check ok", "available_wei", avail.String(), "required_wei", priceWei.String())
+		c.payInfo("balance check ok", "available_base_units", avail.String(), "required_base_units", priceBaseUnits.String())
 	}
 	until, err := c.eth.BlockNumber(ctx)
 	if err != nil {
@@ -691,7 +691,7 @@ func (c *Client) SettleIfFunded(ctx context.Context, payer, payee common.Address
 	c.payDebug("settle epoch source", "rpc_block_number", untilEpoch.String(), "computed_epoch", expectedEpoch.String())
 	fee := big.NewInt(0)
 	c.payInfo("submitting settleRail", "rail_id", railID.String(), "until_epoch", untilEpoch.String(),
-		"settlement_fee_wei", fee.String(), "signer", c.signerAddr.Hex())
+		"settlement_fee_base_units", fee.String(), "signer", c.signerAddr.Hex())
 	opts, err := bind.NewKeyedTransactorWithChainID(c.signerKey, c.chainID)
 	if err != nil {
 		return "", fmt.Errorf("filpay: transactor: %w", err)
@@ -706,11 +706,11 @@ func (c *Client) SettleIfFunded(ctx context.Context, payer, payee common.Address
 	h := tx.Hash().Hex()
 	c.payInfo("settleRail tx submitted", "tx_hash", h, "rail_id", railID.String())
 	if payee == c.signerAddr {
-		withdrawTx, amountWei, werr := c.WithdrawTokenAvailable(ctx, payee)
+		withdrawTx, amountBaseUnits, werr := c.WithdrawTokenAvailable(ctx, payee)
 		if werr != nil {
 			return "", fmt.Errorf("filpay: settle ok but withdraw failed: %w", werr)
 		}
-		c.payInfo("withdraw after settle", "withdraw_tx", withdrawTx, "amount_wei", amountWei.String(), "owner", payee.Hex())
+		c.payInfo("withdraw after settle", "withdraw_tx", withdrawTx, "amount_base_units", amountBaseUnits.String(), "owner", payee.Hex())
 	}
 	return h, nil
 }

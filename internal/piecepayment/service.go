@@ -41,7 +41,7 @@ type DealStore interface {
 }
 
 type FilecoinPaySettler interface {
-	SettleIfFunded(ctx context.Context, payer, payee common.Address, priceWei *big.Int) (txHash string, err error)
+	SettleIfFunded(ctx context.Context, payer, payee common.Address, priceBaseUnits *big.Int) (txHash string, err error)
 }
 
 type QuoteOutcome struct {
@@ -165,9 +165,9 @@ func (s *RetrievalService) AuthorizeAndSettle(r *http.Request, cid, rawHdr strin
 	if err := verifier.Verify(hdr.ClientAddress, hdr.CanonicalMessage(), hdr.Signature); err != nil {
 		return nil, &PaymentRequiredError{Deal: deal, Code: "verification-failed", Detail: "Credential signature verification failed"}
 	}
-	priceWei, err := paymentheader.ParseTokenToWei(deal.PriceUSDFC)
+	priceBaseUnits, err := paymentheader.ParseTokenToBaseUnits(deal.PriceUSDFC)
 	if err != nil {
-		return nil, fmt.Errorf("parse price fil: %w", err)
+		return nil, fmt.Errorf("parse price usdfc: %w", err)
 	}
 	if err := s.cfg.Store.ConsumeNonce(r.Context(), deal.DealUUID, hdr.Nonce, hdr.ExpiresUnix); err != nil {
 		if err == ErrReplayNonce {
@@ -177,7 +177,7 @@ func (s *RetrievalService) AuthorizeAndSettle(r *http.Request, cid, rawHdr strin
 	}
 	payer := common.HexToAddress(strings.TrimSpace(deal.Client))
 	payeeAddr := common.HexToAddress(strings.TrimSpace(deal.Payee0x))
-	txHash, err := s.cfg.FilecoinPay.SettleIfFunded(r.Context(), payer, payeeAddr, priceWei)
+	txHash, err := s.cfg.FilecoinPay.SettleIfFunded(r.Context(), payer, payeeAddr, priceBaseUnits)
 	if err != nil {
 		return nil, &PaymentRequiredError{Deal: deal, Code: "payment-insufficient", Detail: "Filecoin Pay rail or available balance is insufficient for settlement"}
 	}

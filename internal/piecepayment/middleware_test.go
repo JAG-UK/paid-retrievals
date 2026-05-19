@@ -108,7 +108,7 @@ type mockPaySettler struct {
 	fail   error
 }
 
-func (m *mockPaySettler) SettleIfFunded(ctx context.Context, payer, payee common.Address, priceWei *big.Int) (string, error) {
+func (m *mockPaySettler) SettleIfFunded(ctx context.Context, payer, payee common.Address, priceBaseUnits *big.Int) (string, error) {
 	m.called++
 	if m.fail != nil {
 		return "", m.fail
@@ -116,7 +116,7 @@ func (m *mockPaySettler) SettleIfFunded(ctx context.Context, payer, payee common
 	if payer == (common.Address{}) || payee == (common.Address{}) {
 		return "", os.ErrInvalid
 	}
-	if priceWei.Sign() <= 0 {
+	if priceBaseUnits.Sign() <= 0 {
 		return "", os.ErrInvalid
 	}
 	return "0xsettle", nil

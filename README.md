@@ -114,7 +114,7 @@ PY
 
 > Keep key files out of git. Add `*.key` (or your chosen names) to `.gitignore`.
 
-## Fund your wallets with token
+## Fund your wallets with tokens
 
 In order to procure paid retrievals both the client wallet and service provider wallet must exist and the client wallet will need to be funded with both FIL and USDFC tokens.
 
