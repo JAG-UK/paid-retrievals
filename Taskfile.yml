@@ -59,6 +59,19 @@ tasks:
     cmds:
       - go test ./...
 
+  test:coverage:
+    desc: Run unit tests and write coverage report
+    deps:
+      - bootstrap
+    cmds:
+      - go test -coverprofile=coverage.out ./...
+      - |
+        echo ""
+        echo "Coverage by function:"
+        go tool cover -func=coverage.out
+      - go tool cover -html=coverage.out -o coverage.html
+      - echo "HTML report written to coverage.html"
+
   lint:
     desc: Run golangci-lint
     deps:
@@ -86,7 +99,7 @@ tasks:
     cmds:
       - task fmt:check
       - task vet
-      - task test
+      - task test:coverage
       - task lint
       - task build
       - task vuln

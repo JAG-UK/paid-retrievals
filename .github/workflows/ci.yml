@@ -40,3 +40,24 @@ jobs:
 
       - name: Run CI task
         run: task ci
+
+      - name: Publish coverage summary
+        if: success()
+        run: |
+          {
+            echo "### Unit test coverage"
+            echo '```text'
+            go tool cover -func=coverage.out
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload coverage report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            coverage.out
+            coverage.html
+          if-no-files-found: error
+          retention-days: 14
