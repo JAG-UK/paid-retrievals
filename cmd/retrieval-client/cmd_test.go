@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"io"
 	"math/big"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -255,9 +255,9 @@ func TestCmdRailCheckWithPayeeFlag(t *testing.T) {
 	defer func() { filpayNewClient = origNew }()
 	filpayNewClient = func(ctx context.Context, rpcURL, privateKeyHex, privateKeyFile, privateKeyEnv, paymentsAddress string, opts ...filpay.Option) (filpayOperations, error) {
 		return &mockFilpayOps{
-			signer:   clientAddr,
-			railID:   big.NewInt(42),
-			avail:    big.NewInt(1000),
+			signer: clientAddr,
+			railID: big.NewInt(42),
+			avail:  big.NewInt(1000),
 			approval: &filpay.OperatorApprovalStatus{
 				Approved: true, RateAllowance: big.NewInt(1), LockupAllowance: big.NewInt(1), MaxLockupPeriod: big.NewInt(1),
 				RateUsed: big.NewInt(0), LockupUsed: big.NewInt(0),
