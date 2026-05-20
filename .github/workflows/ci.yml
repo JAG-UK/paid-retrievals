@@ -47,7 +47,7 @@ jobs:
           {
             echo "### Unit test coverage"
             echo '```text'
-            go tool cover -func=coverage.out
+            bash scripts/coverage-summary.sh coverage.out .task/coverage-test.log
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
 

@@ -64,13 +64,15 @@ tasks:
     deps:
       - bootstrap
     cmds:
-      - go test -coverprofile=coverage.out ./...
       - |
-        echo ""
-        echo "Coverage by function:"
-        go tool cover -func=coverage.out
+        set -euo pipefail
+        mkdir -p .task
+        if ! go test -coverprofile=coverage.out ./... > .task/coverage-test.log 2>&1; then
+          cat .task/coverage-test.log
+          exit 1
+        fi
+        bash scripts/coverage-summary.sh coverage.out .task/coverage-test.log
       - go tool cover -html=coverage.out -o coverage.html
-      - echo "HTML report written to coverage.html"
 
   lint:
     desc: Run golangci-lint
