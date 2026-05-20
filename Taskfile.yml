@@ -54,10 +54,8 @@ tasks:
 
   test:
     desc: Run unit tests
-    deps:
-      - bootstrap
     cmds:
-      - go test ./...
+      - task test:coverage
 
   test:coverage:
     desc: Run unit tests and write coverage report
@@ -101,7 +99,7 @@ tasks:
     cmds:
       - task fmt:check
       - task vet
-      - task test:coverage
+      - task test
       - task lint
       - task build
       - task vuln
