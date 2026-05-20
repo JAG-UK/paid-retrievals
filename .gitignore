@@ -5,6 +5,7 @@
 
 # Go
 coverage.out
+coverage.html
 vendor/
 
 # Local tooling

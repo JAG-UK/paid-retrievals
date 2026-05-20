@@ -54,10 +54,23 @@ tasks:
 
   test:
     desc: Run unit tests
+    cmds:
+      - task test:coverage
+
+  test:coverage:
+    desc: Run unit tests and write coverage report
     deps:
       - bootstrap
     cmds:
-      - go test ./...
+      - |
+        set -euo pipefail
+        mkdir -p .task
+        if ! go test -coverprofile=coverage.out ./... > .task/coverage-test.log 2>&1; then
+          cat .task/coverage-test.log
+          exit 1
+        fi
+        bash scripts/coverage-summary.sh coverage.out .task/coverage-test.log
+      - go tool cover -html=coverage.out -o coverage.html
 
   lint:
     desc: Run golangci-lint
