@@ -31,7 +31,7 @@ Where `request` decodes to:
 {
   "deal_uuid": "uuid",
   "cid": "baga...",
-  "price_fil": "0.01",
+  "price_usdfc": "0.01",
   "payee_0x": "0x...",
   "method": "GET",
   "path": "/piece/<cid>",
@@ -49,7 +49,7 @@ Optional auth-params handled:
 Notes:
 - `challenge_id` is unique per quote and currently equals `deal_uuid`.
 - `expires` is RFC3339 and is a short challenge TTL.
-- `price_fil` is decimal FIL string and is converted to wei server-side before settle.
+- `price_usdfc` is decimal USDFC string and is converted to base units server-side before settle.
 
 ## Paid Proof Schema (`Authorization: Payment ...`)
 
@@ -113,7 +113,7 @@ For a paid request, proxy must verify:
 - `method/path/host/cid/client` bind to this HTTP request and stored deal
 - `challenge_id/deal_uuid` match an existing quoted deal
 - nonce is unused for that deal (`used_nonces` table)
-- Filecoin Pay settle succeeds for quoted `price_fil`
+- Filecoin Pay settle succeeds for quoted `price_usdfc`
 
 If any check fails:
 - reject with `402` and a fresh `WWW-Authenticate: Payment ...` challenge

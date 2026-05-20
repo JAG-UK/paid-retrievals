@@ -16,13 +16,13 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	pk := crypto.FromECDSA(key)
 
 	ph := &PaymentHeader{
-		Version:      Version,
-		DealID:       "deal-1",
-		RailID:       "rail-1",
-		RequestID:    "req-1",
-		Pieces:       []string{"bafy1", "bafy2"},
-		AmountWei:    "42",
-		DeadlineUnix: time.Now().Add(time.Hour).Unix(),
+		Version:         Version,
+		DealID:          "deal-1",
+		RailID:          "rail-1",
+		RequestID:       "req-1",
+		Pieces:          []string{"bafy1", "bafy2"},
+		AmountBaseUnits: "42",
+		DeadlineUnix:    time.Now().Add(time.Hour).Unix(),
 	}
 	if err := ph.Sign(common.Bytes2Hex(pk)); err != nil {
 		t.Fatal(err)
@@ -47,13 +47,13 @@ func TestReplayDifferentCanonical(t *testing.T) {
 	key, _ := crypto.GenerateKey()
 	pk := common.Bytes2Hex(crypto.FromECDSA(key))
 	ph := &PaymentHeader{
-		Version:      Version,
-		DealID:       "deal-1",
-		RailID:       "rail-1",
-		RequestID:    "req-1",
-		Pieces:       []string{"a", "b"},
-		AmountWei:    "1",
-		DeadlineUnix: time.Now().Add(time.Hour).Unix(),
+		Version:         Version,
+		DealID:          "deal-1",
+		RailID:          "rail-1",
+		RequestID:       "req-1",
+		Pieces:          []string{"a", "b"},
+		AmountBaseUnits: "1",
+		DeadlineUnix:    time.Now().Add(time.Hour).Unix(),
 	}
 	if err := ph.Sign(pk); err != nil {
 		t.Fatal(err)

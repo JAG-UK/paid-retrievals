@@ -28,15 +28,15 @@ const (
 // PaymentHeader proves a client funded a rail for a specific deal and authorizes
 // a single logical retrieval attempt identified by RequestID (nonce).
 type PaymentHeader struct {
-	Version       int      `json:"v"`
-	DealID        string   `json:"deal_id"`
-	RailID        string   `json:"rail_id"`
-	RequestID     string   `json:"request_id"`
-	Pieces        []string `json:"pieces"`
-	AmountWei     string   `json:"amount_wei"` // decimal string; matches on-chain uint256
-	DeadlineUnix  int64    `json:"deadline_unix"`
-	ClientAddress string   `json:"client"` // 0x-prefixed hex checksummed EVM address (skeleton)
-	Signature     string   `json:"sig"`    // 0x-prefixed hex: sign(keccak256(canonical))
+	Version         int      `json:"v"`
+	DealID          string   `json:"deal_id"`
+	RailID          string   `json:"rail_id"`
+	RequestID       string   `json:"request_id"`
+	Pieces          []string `json:"pieces"`
+	AmountBaseUnits string   `json:"amount_base_units"` // decimal string; matches on-chain uint256
+	DeadlineUnix    int64    `json:"deadline_unix"`
+	ClientAddress   string   `json:"client"` // 0x-prefixed hex checksummed EVM address (skeleton)
+	Signature       string   `json:"sig"`    // 0x-prefixed hex: sign(keccak256(canonical))
 }
 
 var (
@@ -58,7 +58,7 @@ func (p *PaymentHeader) CanonicalHash() common.Hash {
 	for _, x := range pieces {
 		fmt.Fprintf(&b, "%s\n", x)
 	}
-	fmt.Fprintf(&b, "%s\n", p.AmountWei)
+	fmt.Fprintf(&b, "%s\n", p.AmountBaseUnits)
 	fmt.Fprintf(&b, "%d\n", p.DeadlineUnix)
 	fmt.Fprintf(&b, "%s\n", strings.ToLower(p.ClientAddress))
 	return crypto.Keccak256Hash([]byte(b.String()))
@@ -95,8 +95,8 @@ func (p *PaymentHeader) Verify(nowUnix int64) error {
 	if p.DeadlineUnix > 0 && nowUnix > p.DeadlineUnix {
 		return ErrExpired
 	}
-	if _, ok := new(big.Int).SetString(p.AmountWei, 10); !ok || p.AmountWei == "" {
-		return fmt.Errorf("%w: amount_wei", ErrInvalidHeader)
+	if _, ok := new(big.Int).SetString(p.AmountBaseUnits, 10); !ok || p.AmountBaseUnits == "" {
+		return fmt.Errorf("%w: amount_base_units", ErrInvalidHeader)
 	}
 	if !common.IsHexAddress(p.ClientAddress) {
 		return fmt.Errorf("%w: client address", ErrInvalidHeader)
@@ -154,9 +154,9 @@ func (p *PaymentHeader) Summary() string {
 	return fmt.Sprintf("deal=%s rail=%s req=%s pieces=%d", p.DealID, p.RailID, p.RequestID, len(p.Pieces))
 }
 
-// MustParseWei parses AmountWei for comparisons (skeleton helpers).
-func (p *PaymentHeader) MustParseWei() *big.Int {
-	v, ok := new(big.Int).SetString(p.AmountWei, 10)
+// MustParseBaseUnits parses AmountBaseUnits for comparisons (skeleton helpers).
+func (p *PaymentHeader) MustParseBaseUnits() *big.Int {
+	v, ok := new(big.Int).SetString(p.AmountBaseUnits, 10)
 	if !ok {
 		return big.NewInt(0)
 	}
@@ -176,13 +176,14 @@ func BuildQuoteFingerprint(dealHint string, pieces []string) string {
 	return crypto.Keccak256Hash(b.Bytes()).Hex()
 }
 
-// ParseFILToWei parses a decimal FIL string like "1.5" into wei (18 decimals).
-func ParseFILToWei(fil string) (*big.Int, error) {
-	fil = strings.TrimSpace(fil)
-	if fil == "" {
+// ParseTokenToBaseUnits parses a decimal token value string like "1.5" into base units.
+// 1 USDFC=10^18 Wei-equivalent base units.
+func ParseTokenToBaseUnits(amount string) (*big.Int, error) {
+	amount = strings.TrimSpace(amount)
+	if amount == "" {
 		return nil, errors.New("empty amount")
 	}
-	parts := strings.SplitN(fil, ".", 2)
+	parts := strings.SplitN(amount, ".", 2)
 	whole := parts[0]
 	if whole == "" {
 		whole = "0"
@@ -200,25 +201,25 @@ func ParseFILToWei(fil string) (*big.Int, error) {
 	s := whole + frac
 	v, ok := new(big.Int).SetString(s, 10)
 	if !ok {
-		return nil, fmt.Errorf("parse %q", fil)
+		return nil, fmt.Errorf("parse %q", amount)
 	}
 	return v, nil
 }
 
-// WeiString returns base-10 wei string.
-func WeiString(w *big.Int) string {
+// BaseUnitsString returns base-10 base-units string.
+func BaseUnitsString(w *big.Int) string {
 	if w == nil {
 		return "0"
 	}
 	return w.String()
 }
 
-// FormatFIL approximates FIL from wei for display (not for chain submission).
-func FormatFIL(wei *big.Int) string {
-	if wei == nil {
+// FormatToken approximates token value from base units for display (not for chain submission).
+func FormatTokenValue(baseUnits *big.Int) string {
+	if baseUnits == nil {
 		return "0"
 	}
-	r := new(big.Rat).SetInt(wei)
+	r := new(big.Rat).SetInt(baseUnits)
 	d := new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
 	r.Quo(r, d)
 	return r.FloatString(6)
@@ -226,35 +227,35 @@ func FormatFIL(wei *big.Int) string {
 
 // QuoteResponse is returned by the optional market quote HTTP API (skeleton).
 type QuoteResponse struct {
-	DealHint   string   `json:"deal_hint"`
-	Pieces     []string `json:"pieces"`
-	PriceWei   string   `json:"price_wei"`
-	QuoteID    string   `json:"quote_id"`
-	SPAddress  string   `json:"sp_address,omitempty"`
-	ValidUntil int64    `json:"valid_until_unix,omitempty"`
+	DealHint       string   `json:"deal_hint"`
+	Pieces         []string `json:"pieces"`
+	PriceBaseUnits string   `json:"price_base_units"`
+	QuoteID        string   `json:"quote_id"`
+	SPAddress      string   `json:"sp_address,omitempty"`
+	ValidUntil     int64    `json:"valid_until_unix,omitempty"`
 }
 
-// EstimateStubPriceWei is a local fallback when no market URL is configured:
-// price_wei = perPieceWei * len(pieces).
-func EstimateStubPriceWei(perPieceWei *big.Int, pieceCount int) *big.Int {
-	if perPieceWei == nil {
-		perPieceWei = big.NewInt(0)
+// EstimateStubPriceBaseUnits is a local fallback when no market URL is configured:
+// price_base_units = perPieceBaseUnits * len(pieces).
+func EstimateStubPriceBaseUnits(perPieceBaseUnits *big.Int, pieceCount int) *big.Int {
+	if perPieceBaseUnits == nil {
+		perPieceBaseUnits = big.NewInt(0)
 	}
-	return new(big.Int).Mul(perPieceWei, big.NewInt(int64(pieceCount)))
+	return new(big.Int).Mul(perPieceBaseUnits, big.NewInt(int64(pieceCount)))
 }
 
-// ParsePerPieceWei parses wei from a flag like "1000000000000000" or "0.001" FIL.
-func ParsePerPieceWei(s string) (*big.Int, error) {
+// ParsePerPieceBaseUnits parses base units from a flag like "1000000000000000" or "0.001" USDFC.
+func ParsePerPieceBaseUnits(s string) (*big.Int, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return big.NewInt(0), nil
 	}
 	if strings.Contains(s, ".") {
-		return ParseFILToWei(s)
+		return ParseTokenToBaseUnits(s)
 	}
 	v, ok := new(big.Int).SetString(s, 10)
 	if !ok {
-		return nil, fmt.Errorf("invalid wei: %q", s)
+		return nil, fmt.Errorf("invalid base units: %q", s)
 	}
 	return v, nil
 }

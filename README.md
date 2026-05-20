@@ -114,11 +114,13 @@ PY
 
 > Keep key files out of git. Add `*.key` (or your chosen names) to `.gitignore`.
 
-## Fund your wallets with FIL
+## Fund your wallets with tokens
 
-In order to procure paid retrievals both the client wallet and service provider wallet must exist and the client wallet will need to be funded with FIL tokens.
+In order to procure paid retrievals both the client wallet and service provider wallet must exist and the client wallet will need to be funded with both FIL and USDFC tokens.
 
-For testing on calibration network you can create and fund each wallet at https://beryx.io/faucet (your wallet address can be seen in the console messages from the client and storage provider if a retrieval is attempted without both wallets existing and sufficient funds being available).
+Payment to Storage Providers for retrieval is made in USDFC while Filecoin Pay transaction costs are paid in FIL.
+
+For testing on calibration network you can create and fund each wallet with FIL at https://beryx.io/faucet and fund the client with USDFC at https://forest-explorer.chainsafe.dev/faucet/calibnet_usdfc (your wallet address can be seen in the console messages from the client and storage provider if a retrieval is attempted without both wallets existing and sufficient funds being available).
 
 ## Run the SP proxy
 
@@ -128,7 +130,7 @@ Minimal example:
 ./bin/sp-proxy \
   --listen :8787 \
   --db ./sp-proxy.db \
-  --price-fil 0.01 \
+  --price-usdfc 0.01 \
   --pay-rpc-url "https://api.calibration.node.glif.io/rpc/v1" \
   --pay-private-key-file ./sp.key
 ```
@@ -137,7 +139,7 @@ Useful flags:
 
 - `--listen`: HTTP listen address (default `:8787`)
 - `--db`: SQLite file for deal state (default `./sp-proxy.db`)
-- `--price-fil`: challenge price per Piece in FIL
+- `--price-usdfc`: challenge price per Piece in USDFC
 - `--pay-rpc-url`: FVM RPC for Filecoin Pay interactions
 - `--pay-private-key|--pay-private-key-file|--pay-private-key-env`: settler key source
 - `--pay-payments-address`: optional payments contract override (empty = chain default)
@@ -201,6 +203,13 @@ If you want to ignore discovered endpoints and only probe one base URL (eg your 
 - `--yes` (skip confirm prompt)
 - `--expires-in-sec` (MPP proof header expiry)
 - `--pay-debug`, `--verbose`
+
+## Validation
+
+To verify that the system is working, check the logs for the client and / or storage provider proxy and identify the rail ID.
+The rail stats can then be viewed in the filecoin cloud.
+
+For calibration network use https://pay.filecoin.cloud/calibration/rails/[RAIL_ID] e.g. https://pay.filecoin.cloud/calibration/rails/16949
 
 ## Environment variables
 

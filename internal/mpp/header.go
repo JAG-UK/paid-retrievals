@@ -25,13 +25,13 @@ const (
 var ErrInvalidHeader = errors.New("invalid mpp payment header")
 
 type PaymentRequest struct {
-	DealUUID string `json:"deal_uuid"`
-	CID      string `json:"cid"`
-	PriceFIL string `json:"price_fil"`
-	Payee0x  string `json:"payee_0x,omitempty"`
-	Method   string `json:"method"`
-	Path     string `json:"path"`
-	Host     string `json:"host"`
+	DealUUID   string `json:"deal_uuid"`
+	CID        string `json:"cid"`
+	PriceUSDFC string `json:"price_usdfc"`
+	Payee0x    string `json:"payee_0x,omitempty"`
+	Method     string `json:"method"`
+	Path       string `json:"path"`
+	Host       string `json:"host"`
 }
 
 type Challenge struct {

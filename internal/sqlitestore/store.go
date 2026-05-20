@@ -39,7 +39,7 @@ func (s *Store) migrate() error {
 			deal_uuid TEXT PRIMARY KEY,
 			client TEXT NOT NULL,
 			cid TEXT NOT NULL,
-			price_fil TEXT NOT NULL,
+			price_usdfc TEXT NOT NULL,
 			payee_0x TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
 			last_quoted_at INTEGER NOT NULL,
@@ -72,22 +72,22 @@ func (s *Store) migrate() error {
 	return nil
 }
 
-func (s *Store) InsertQuote(ctx context.Context, dealUUID, client, cid, priceFIL, payee0x string) error {
+func (s *Store) InsertQuote(ctx context.Context, dealUUID, client, cid, priceUSDFC, payee0x string) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO deals(deal_uuid, client, cid, price_fil, payee_0x, created_at, last_quoted_at, quoted_seen)
+		INSERT INTO deals(deal_uuid, client, cid, price_usdfc, payee_0x, created_at, last_quoted_at, quoted_seen)
 		VALUES(?,?,?,?,?,?,?,1)
-	`, dealUUID, client, cid, priceFIL, payee0x, now, now)
+	`, dealUUID, client, cid, priceUSDFC, payee0x, now, now)
 	return err
 }
 
 func (s *Store) GetDeal(ctx context.Context, dealUUID string) (*piecepayment.Deal, error) {
 	var d piecepayment.Deal
 	err := s.db.QueryRowContext(ctx, `
-		SELECT deal_uuid, client, cid, price_fil, COALESCE(payee_0x, '')
+		SELECT deal_uuid, client, cid, price_usdfc, COALESCE(payee_0x, '')
 		FROM deals WHERE deal_uuid = ?
 	`, dealUUID).Scan(
-		&d.DealUUID, &d.Client, &d.CID, &d.PriceFIL, &d.Payee0x,
+		&d.DealUUID, &d.Client, &d.CID, &d.PriceUSDFC, &d.Payee0x,
 	)
 	if err == sql.ErrNoRows {
 		return nil, piecepayment.ErrDealNotFound

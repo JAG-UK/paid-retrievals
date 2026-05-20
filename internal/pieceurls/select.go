@@ -27,16 +27,16 @@ type Selection struct {
 	Free      bool
 	SavedPath string
 
-	DealUUID string
-	PriceFIL string
-	Payee0x  string
+	DealUUID   string
+	PriceUSDFC string
+	Payee0x    string
 	// Challenge is set for paid (402) selections; parsed from WWW-Authenticate (MPP).
 	Challenge mpp.Challenge
 }
 
 // SelectBestPieceSource probes GET {base}/piece/{cid}?client=… for each base (concurrently).
 // Any 200 response is treated as a free direct CAR download (saved under outDir).
-// Among 402 responses with a valid MPP WWW-Authenticate challenge, the lowest price_fil (parsed as wei) wins.
+// Among 402 responses with a valid MPP WWW-Authenticate challenge, the lowest price_usdfc (parsed as base units) wins.
 // Other status codes and failures are ignored.
 func SelectBestPieceSource(ctx context.Context, cli *http.Client, pieceCID, client0x, outDir string, bases []*url.URL, log func(string, ...any)) (*Selection, error) {
 	if len(bases) == 0 {
@@ -54,7 +54,7 @@ func SelectBestPieceSource(ctx context.Context, cli *http.Client, pieceCID, clie
 
 	var mu sync.Mutex
 	var bestPaid *Selection
-	var bestWei *big.Int
+	var bestBaseUnits *big.Int
 
 	for _, b := range bases {
 		b := cloneURLBase(b)
@@ -78,12 +78,12 @@ func SelectBestPieceSource(ctx context.Context, cli *http.Client, pieceCID, clie
 
 			mu.Lock()
 			defer mu.Unlock()
-			w, err := paymentheader.ParseFILToWei(sel.PriceFIL)
+			w, err := paymentheader.ParseTokenToBaseUnits(sel.PriceUSDFC)
 			if err != nil {
 				return
 			}
-			if bestWei == nil || w.Cmp(bestWei) < 0 {
-				bestWei = w
+			if bestBaseUnits == nil || w.Cmp(bestBaseUnits) < 0 {
+				bestBaseUnits = w
 				cp := *sel
 				bestPaid = &cp
 			}
@@ -189,23 +189,23 @@ func probePieceEndpoint(ctx context.Context, cli *http.Client, base *url.URL, ci
 			}
 			return nil, err
 		}
-		if ch.Request.DealUUID == "" || ch.Request.PriceFIL == "" {
+		if ch.Request.DealUUID == "" || ch.Request.PriceUSDFC == "" {
 			if log != nil {
 				log("probe 402 challenge OK cid=%s base=%s: invalid MPP challenge request", cid, base.String())
 			}
 			return nil, errors.New("invalid MPP challenge payload")
 		}
 		if log != nil {
-			log("challenge OK payment={id:%s deal_uuid:%s cid:%s price_fil:%s payee_0x:%q}", ch.ID, ch.Request.DealUUID, ch.Request.CID, ch.Request.PriceFIL, ch.Request.Payee0x)
+			log("challenge OK payment={id:%s deal_uuid:%s cid:%s price_usdfc:%s payee_0x:%q}", ch.ID, ch.Request.DealUUID, ch.Request.CID, ch.Request.PriceUSDFC, ch.Request.Payee0x)
 		}
 		return &Selection{
-			Base:      cloneURLBase(base),
-			CID:       cid,
-			Free:      false,
-			DealUUID:  ch.Request.DealUUID,
-			PriceFIL:  ch.Request.PriceFIL,
-			Payee0x:   strings.TrimSpace(ch.Request.Payee0x),
-			Challenge: *ch,
+			Base:       cloneURLBase(base),
+			CID:        cid,
+			Free:       false,
+			DealUUID:   ch.Request.DealUUID,
+			PriceUSDFC: ch.Request.PriceUSDFC,
+			Payee0x:    strings.TrimSpace(ch.Request.Payee0x),
+			Challenge:  *ch,
 		}, nil
 
 	default:
