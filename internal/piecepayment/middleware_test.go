@@ -3,6 +3,7 @@ package piecepayment_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -272,3 +273,237 @@ func TestReplayNonceRejected(t *testing.T) {
 		t.Fatalf("expected invalid-challenge type, got %s", pt)
 	}
 }
+
+func TestInvalidPiecePathNotFound(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	h := newTestHandler(pp.Config{Store: s, FilecoinPay: &mockPaySettler{}})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL + "/piece/short")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+}
+
+func TestBadClientAddress(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	h := newTestHandler(pp.Config{Store: s, FilecoinPay: &mockPaySettler{}, QuotePayee0x: testQuotePayee0x})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL + "/piece/" + testPieceCID + "?client=not-valid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+}
+
+func TestClientFromHeader(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	h := newTestHandler(pp.Config{Store: s, FilecoinPay: &mockPaySettler{}, QuotePayee0x: testQuotePayee0x})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/"+testPieceCID, nil)
+	req.Header.Set("X-Client-Address", "0x3333333333333333333333333333333333333333")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+}
+
+func TestOversizedAuthorizationForbidden(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	cfg := pp.Config{Store: s, FilecoinPay: &mockPaySettler{}, QuotePayee0x: testQuotePayee0x}
+	svc := pp.NewRetrievalService(cfg)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := svc.PiecePaymentMiddleware(8)(next)
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/"+testPieceCID, nil)
+	req.Header.Set("Authorization", strings.Repeat("x", 64))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+}
+
+func TestUpstreamMissingReturnsStatus(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	cfg := pp.Config{Store: s, FilecoinPay: &mockPaySettler{}, QuotePayee0x: testQuotePayee0x}
+	svc := pp.NewRetrievalService(cfg)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	ts := httptest.NewServer(svc.PiecePaymentMiddleware(4096)(next))
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL + "/piece/" + testPieceCID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+}
+
+func TestMalformedAuthorizationProblem(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	cfg := pp.Config{Store: s, FilecoinPay: &mockPaySettler{}, QuotePayee0x: testQuotePayee0x}
+	svc := pp.NewRetrievalService(cfg)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	ts := httptest.NewServer(svc.PiecePaymentMiddleware(4096)(next))
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/"+testPieceCID, nil)
+	req.Header.Set("Authorization", "Payment not-valid-b64!!!")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+	if mustProblemType(t, res) != "https://paymentauth.org/problems/malformed-credential" {
+		t.Fatal("problem type")
+	}
+}
+
+func TestSettlementFailureProblem(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	pk, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := crypto.PubkeyToAddress(pk.PublicKey).Hex()
+	mock := &mockPaySettler{fail: errors.New("insufficient")}
+	h := newTestHandler(pp.Config{
+		PriceUSDFC: "0.1", FilecoinPay: mock, QuotePayee0x: testQuotePayee0x, Store: s,
+	})
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	const cid = testPieceCID
+	qres, err := http.Get(ts.URL + "/piece/" + cid + "?client=" + client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer qres.Body.Close()
+	challenge := mustChallengeFromResponse(t, qres)
+	hdr := &mpp.ProofPayload{
+		Version: mpp.VersionV1, ChallengeID: challenge.ID, DealUUID: challenge.ID,
+		ClientAddress: client, CID: cid, Method: http.MethodGet, Path: "/piece/" + cid,
+		Host: mustHostFromURL(t, ts.URL), Nonce: "pay-fail", ExpiresUnix: time.Now().Add(time.Minute).Unix(),
+	}
+	st, sig, err := mpp.SignEVM(pk, hdr.CanonicalMessage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr.SigType, hdr.Signature = st, sig
+	raw := mustAuthorization(t, *challenge, hdr)
+	paidReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/"+cid, nil)
+	paidReq.Header.Set("Authorization", raw)
+	paidRes, err := http.DefaultClient.Do(paidReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer paidRes.Body.Close()
+	if paidRes.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("status %d", paidRes.StatusCode)
+	}
+	if mustProblemType(t, paidRes) != "https://paymentauth.org/problems/payment-insufficient" {
+		t.Fatal("problem type")
+	}
+}
+
+func TestPieceAuthContextAndReceipt(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	pk, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := crypto.PubkeyToAddress(pk.PublicKey).Hex()
+	mock := &mockPaySettler{}
+	cfg := pp.Config{
+		PriceUSDFC: "0.1", FilecoinPay: mock, QuotePayee0x: testQuotePayee0x, Store: s,
+		ClientQuery: "client", ClientHeader: "X-Client-Address", MaxClockSkew: 30 * time.Second,
+	}
+	svc := pp.NewRetrievalService(cfg)
+	var sawAuth bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		auth, ok := pp.PieceAuthFromContext(r.Context())
+		sawAuth = ok && auth.TxHash != "" && auth.CID != ""
+		_, _ = w.Write([]byte("car-bytes"))
+	})
+	ts := httptest.NewServer(svc.PiecePaymentMiddleware(4096)(next))
+	defer ts.Close()
+
+	const cid = testPieceCID
+	qres, err := http.Get(ts.URL + "/piece/" + cid + "?client=" + client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer qres.Body.Close()
+	challenge := mustChallengeFromResponse(t, qres)
+	hdr := &mpp.ProofPayload{
+		Version: mpp.VersionV1, ChallengeID: challenge.ID, DealUUID: challenge.ID,
+		ClientAddress: client, CID: cid, Method: http.MethodGet, Path: "/piece/" + cid,
+		Host: mustHostFromURL(t, ts.URL), Nonce: "ctx-n", ExpiresUnix: time.Now().Add(time.Minute).Unix(),
+	}
+	st, sig, err := mpp.SignEVM(pk, hdr.CanonicalMessage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr.SigType, hdr.Signature = st, sig
+	raw := mustAuthorization(t, *challenge, hdr)
+	paidReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/"+cid, nil)
+	paidReq.Header.Set("Authorization", raw)
+	paidRes, err := http.DefaultClient.Do(paidReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer paidRes.Body.Close()
+	if paidRes.StatusCode != http.StatusOK || !sawAuth {
+		t.Fatalf("status=%d sawAuth=%v", paidRes.StatusCode, sawAuth)
+	}
+	if paidRes.Header.Get("Payment-Receipt") == "" {
+		t.Fatal("missing Payment-Receipt header")
+	}
+}
+
+const testPieceCID = "bafkreidde4sfyosf2pm6u4vxb65wogjg464a6y6tcg75opo6q5wv34bley"
