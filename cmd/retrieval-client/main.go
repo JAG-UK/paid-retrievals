@@ -156,6 +156,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 			// users can manually cancel if required
 			cli := &http.Client{}
 			discoverCli := &http.Client{Timeout: 90 * time.Second}
+			pieceProber := pieceurls.NewClient(cli)
 			ctx := cmd.Context()
 			if ctx == nil {
 				ctx = context.Background()
@@ -204,7 +205,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 					}
 				}
 
-				sel, err := pieceurls.SelectBestPieceSource(ctx, cli, cid, client, outDir, bases, probeLog)
+				sel, err := pieceProber.SelectBestPieceSource(ctx, cid, client, outDir, bases, probeLog)
 				if err != nil {
 					return fmt.Errorf("dataset incomplete: no usable source for CID %s: %w", cid, err)
 				}
@@ -427,6 +428,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 				}
 				cli := &http.Client{Timeout: 120 * time.Second}
 				discoverCli := &http.Client{Timeout: 90 * time.Second}
+				pieceProber := pieceurls.NewClient(cli)
 				ctx := cmd.Context()
 				if ctx == nil {
 					ctx = context.Background()
@@ -466,7 +468,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 							return fmt.Errorf("discover: no HTTP endpoints for CID %s; use --sp-base-url to force a proxy", cid)
 						}
 					}
-					sel, err := pieceurls.SelectBestPieceSource(ctx, cli, cid, client, probeDir, bases, probeLog)
+					sel, err := pieceProber.SelectBestPieceSource(ctx, cid, client, probeDir, bases, probeLog)
 					if err != nil {
 						return fmt.Errorf("no usable source for CID %s: %w", cid, err)
 					}

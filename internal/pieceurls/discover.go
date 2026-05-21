@@ -15,21 +15,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	filecoinToolsAPI  = "https://api.filecoin.tools/api"
-	cidContactBaseURL = "https://cid.contact"
-	searchPageLimit   = 100
-	parallelProviders = 8
-)
-
 // DiscoverPieceHTTPBases returns unique SP HTTP bases that may serve /piece/<pieceCID>,
 // following the same steps as DUV cid-all-sp-piece-urls.sh (filecoin.tools search → providers → cid.contact / Lotus).
-// lotusRPC is used for Filecoin.StateMinerInfo (same chain as your FVM / payments RPC).
-func DiscoverPieceHTTPBases(ctx context.Context, cli *http.Client, pieceCID, lotusRPC string) ([]*url.URL, error) {
+func (c *Client) DiscoverPieceHTTPBases(ctx context.Context, pieceCID string) ([]*url.URL, error) {
+	if c == nil || c.HTTP == nil {
+		return nil, fmt.Errorf("pieceurls: client or HTTP client is nil")
+	}
 	if strings.TrimSpace(pieceCID) == "" {
 		return nil, fmt.Errorf("empty piece CID")
 	}
-	providers, err := searchAllProviderIDs(ctx, cli, pieceCID)
+	providers, err := c.searchAllProviderIDs(ctx, pieceCID)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +32,11 @@ func DiscoverPieceHTTPBases(ctx context.Context, cli *http.Client, pieceCID, lot
 		return nil, nil
 	}
 
-	sem := make(chan struct{}, parallelProviders)
+	parallel := c.ProviderParallelism
+	if parallel <= 0 {
+		parallel = defaultProviderParallel
+	}
+	sem := make(chan struct{}, parallel)
 	var mu sync.Mutex
 	baseStrs := map[string]struct{}{}
 
@@ -52,7 +51,7 @@ func DiscoverPieceHTTPBases(ctx context.Context, cli *http.Client, pieceCID, lot
 			}
 			defer func() { <-sem }()
 
-			bases, err := resolveProviderHTTPBases(ctx, cli, pid, lotusRPC)
+			bases, err := c.resolveProviderHTTPBases(ctx, pid)
 			if err != nil {
 				// Best-effort per provider (Lotus / cid.contact flakes).
 				return nil
@@ -94,11 +93,17 @@ func DiscoverPieceHTTPBases(ctx context.Context, cli *http.Client, pieceCID, lot
 	return out, nil
 }
 
-func searchAllProviderIDs(ctx context.Context, cli *http.Client, pieceCID string) ([]string, error) {
+func (c *Client) searchAllProviderIDs(ctx context.Context, pieceCID string) ([]string, error) {
 	seen := map[string]struct{}{}
 	var order []string
-	limit := searchPageLimit
-	api := strings.TrimRight(filecoinToolsAPI, "/")
+	limit := c.SearchPageLimit
+	if limit <= 0 {
+		limit = defaultSearchPageLimit
+	}
+	api := strings.TrimRight(c.FilecoinToolsAPI, "/")
+	if api == "" {
+		api = defaultFilecoinToolsAPI
+	}
 
 	for page := 1; ; page++ {
 		u, err := url.Parse(api + "/search")
@@ -117,7 +122,7 @@ func searchAllProviderIDs(ctx context.Context, cli *http.Client, pieceCID string
 		}
 		req.Header.Set("Accept", "*/*")
 
-		res, err := cli.Do(req)
+		res, err := c.HTTP.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("filecoin.tools search page %d: %w", page, err)
 		}
@@ -181,14 +186,18 @@ func normalizeProviderID(s string) string {
 	return "f0" + s
 }
 
-func resolveProviderHTTPBases(ctx context.Context, cli *http.Client, providerID, lotusRPC string) ([]string, error) {
-	minfo, err := lotusStateMinerInfo(ctx, cli, lotusRPC, providerID)
+func (c *Client) resolveProviderHTTPBases(ctx context.Context, providerID string) ([]string, error) {
+	minfo, err := c.lotusStateMinerInfo(ctx, providerID)
 	if err != nil {
 		return nil, err
 	}
 	var endpoints []string
+	cidBase := c.CIDContactBaseURL
+	if cidBase == "" {
+		cidBase = defaultCIDContactBaseURL
+	}
 	if minfo != nil && strings.TrimSpace(minfo.PeerID) != "" {
-		addrs, err := cidContactAddrs(ctx, cli, cidContactBaseURL, minfo.PeerID)
+		addrs, err := c.cidContactAddrs(ctx, cidBase, minfo.PeerID)
 		if err == nil {
 			for _, a := range addrs {
 				if b := HTTPBaseFromMultiaddrString(a); b != "" {
@@ -208,8 +217,8 @@ type minerInfoResult struct {
 	Multiaddrs []string `json:"Multiaddrs"`
 }
 
-func lotusStateMinerInfo(ctx context.Context, cli *http.Client, lotusRPC, providerID string) (*minerInfoResult, error) {
-	rpc := strings.TrimSpace(lotusRPC)
+func (c *Client) lotusStateMinerInfo(ctx context.Context, providerID string) (*minerInfoResult, error) {
+	rpc := strings.TrimSpace(c.LotusRPC)
 	if rpc == "" {
 		return nil, fmt.Errorf("empty lotus RPC URL")
 	}
@@ -220,7 +229,7 @@ func lotusStateMinerInfo(ctx context.Context, cli *http.Client, lotusRPC, provid
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	res, err := cli.Do(req)
+	res, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +247,7 @@ func lotusStateMinerInfo(ctx context.Context, cli *http.Client, lotusRPC, provid
 	return wrap.Result, nil
 }
 
-func cidContactAddrs(ctx context.Context, cli *http.Client, cidContactBase, peerID string) ([]string, error) {
+func (c *Client) cidContactAddrs(ctx context.Context, cidContactBase, peerID string) ([]string, error) {
 	base := strings.TrimRight(strings.TrimSpace(cidContactBase), "/")
 	u := base + "/providers/" + strings.TrimPrefix(strings.TrimSpace(peerID), "/")
 
@@ -246,7 +255,7 @@ func cidContactAddrs(ctx context.Context, cli *http.Client, cidContactBase, peer
 	if err != nil {
 		return nil, err
 	}
-	res, err := cli.Do(req)
+	res, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}

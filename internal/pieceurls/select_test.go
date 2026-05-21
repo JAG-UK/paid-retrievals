@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,8 +66,8 @@ func TestSelectBestPieceSource_Cheapest402(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	cli := &http.Client{Timeout: 30 * time.Second}
-	sel, err := SelectBestPieceSource(context.Background(), cli, cid, "0x3333333333333333333333333333333333333333", dir, []*url.URL{uHigh, uLow}, nil)
+	c := NewClient(&http.Client{Timeout: 30 * time.Second})
+	sel, err := c.SelectBestPieceSource(context.Background(), cid, "0x3333333333333333333333333333333333333333", dir, []*url.URL{uHigh, uLow}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,8 +103,8 @@ func TestSelectBestPieceSource_FreeBeatsPaid(t *testing.T) {
 	uFree, _ := url.Parse(sFree.URL)
 
 	dir := t.TempDir()
-	cli := &http.Client{Timeout: 30 * time.Second}
-	sel, err := SelectBestPieceSource(context.Background(), cli, cid, "0x5555555555555555555555555555555555555555", dir, []*url.URL{uPaid, uFree}, nil)
+	c := NewClient(&http.Client{Timeout: 30 * time.Second})
+	sel, err := c.SelectBestPieceSource(context.Background(), cid, "0x5555555555555555555555555555555555555555", dir, []*url.URL{uPaid, uFree}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,5 +117,118 @@ func TestSelectBestPieceSource_FreeBeatsPaid(t *testing.T) {
 	}
 	if string(b) != "fake-car-bytes" {
 		t.Fatalf("unexpected CAR body %q", string(b))
+	}
+}
+
+func TestSelectBestPieceSource_NoBases(t *testing.T) {
+	c := NewClient(&http.Client{})
+	_, err := c.SelectBestPieceSource(context.Background(), "bafy", "0x1", t.TempDir(), nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "no candidate bases") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestSelectBestPieceSource_NoUsableEndpoint(t *testing.T) {
+	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusNotFound)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	c := NewClient(srv.Client())
+	_, err := c.SelectBestPieceSource(context.Background(), cid, "0x2", t.TempDir(), []*url.URL{u}, nil)
+	if err == nil || !strings.Contains(err.Error(), "no usable endpoint") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestSelectBestPieceSource_Bad402Header(t *testing.T) {
+	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", "Bearer junk")
+		w.WriteHeader(http.StatusPaymentRequired)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	var logs []string
+	logFn := func(format string, args ...any) { logs = append(logs, format) }
+	c := NewClient(srv.Client())
+	_, err := c.SelectBestPieceSource(context.Background(), cid, "0x3", t.TempDir(), []*url.URL{u}, logFn)
+	if err == nil || !strings.Contains(err.Error(), "no usable endpoint") {
+		t.Fatalf("got %v", err)
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected probe logs")
+	}
+}
+
+func TestSelectBestPieceSource_InvalidChallengePayload(t *testing.T) {
+	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("WWW-Authenticate", `Payment realm="x", method="filecoinpay", intent="retrieval", id="d", request="e30"`)
+		w.WriteHeader(http.StatusPaymentRequired)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	c := NewClient(srv.Client())
+	_, err := c.SelectBestPieceSource(context.Background(), cid, "0x4", t.TempDir(), []*url.URL{u}, nil)
+	if err == nil {
+		t.Fatal("expected no usable endpoint")
+	}
+}
+
+func TestSelectBestPieceSource_NilClient(t *testing.T) {
+	var c *Client
+	_, err := c.SelectBestPieceSource(context.Background(), "bafy", "0x1", t.TempDir(), []*url.URL{{Scheme: "http", Host: "h"}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "nil") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestPackageSelectBestPieceSourceWrapper(t *testing.T) {
+	const cid = "bafkreieuudnwcbsdc4aknumlx2hkj3c5ipq5ixhb2gbi4n35phf4cara6i"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("x"))
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	sel, err := SelectBestPieceSource(context.Background(), srv.Client(), cid, "0x5", t.TempDir(), []*url.URL{u}, nil)
+	if err != nil || !sel.Free {
+		t.Fatalf("got %v free=%v", err, sel != nil && sel.Free)
+	}
+}
+
+func TestSanitizeFilename(t *testing.T) {
+	if sanitizeFilename("") != "piece" {
+		t.Fatal("empty")
+	}
+	if sanitizeFilename("ok-CID.123") != "ok-CID.123" {
+		t.Fatal("alnum")
+	}
+	if sanitizeFilename("a/b:c") != "a_b_c" {
+		t.Fatalf("got %q", sanitizeFilename("a/b:c"))
+	}
+}
+
+func TestTruncateForLog(t *testing.T) {
+	if truncateForLog("  hi  ", 10) != "hi" {
+		t.Fatal("trim")
+	}
+	long := strings.Repeat("x", 20)
+	got := truncateForLog(long, 5)
+	if got != "xxxxx…" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestCloneURLBase(t *testing.T) {
+	if cloneURLBase(nil) != nil {
+		t.Fatal("nil")
+	}
+	u, _ := url.Parse("http://h/p?q=1#frag")
+	cp := cloneURLBase(u)
+	if cp.Path != "" || cp.RawQuery != "" || cp.Fragment != "" {
+		t.Fatalf("got %+v", cp)
 	}
 }
