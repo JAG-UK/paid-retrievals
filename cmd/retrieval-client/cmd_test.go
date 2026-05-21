@@ -29,12 +29,28 @@ const (
 	testPieceCID2 = "bafkreieuudnwcbsdc4aknumlx2hkj3c5ipq5ixhb2gbi4n35phf4cara6i"
 )
 
+type stubPieceDiscovery struct {
+	bases []*url.URL
+	err   error
+}
+
+func (s stubPieceDiscovery) DiscoverPieceHTTPBases(context.Context, string) ([]*url.URL, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.bases, nil
+}
+
+func setDiscoverStub(s pieceDiscoveryClient) {
+	newPieceDiscoveryClient = func(*http.Client, string) pieceDiscoveryClient { return s }
+}
+
 func restoreHooks(t *testing.T) func() {
 	t.Helper()
-	origNew, origDisc, origPrompt := filpayNewClient, discoverPieceHTTPBases, promptReader
+	origNew, origDisc, origPrompt := filpayNewClient, newPieceDiscoveryClient, promptReader
 	return func() {
 		filpayNewClient = origNew
-		discoverPieceHTTPBases = origDisc
+		newPieceDiscoveryClient = origDisc
 		promptReader = origPrompt
 	}
 }
@@ -51,10 +67,8 @@ func stubDiscoverURL(t *testing.T, raw string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	discoverPieceHTTPBases = func(ctx context.Context, cli *http.Client, pieceCID, lotusRPC string) ([]*url.URL, error) {
-		nu := *u
-		return []*url.URL{&nu}, nil
-	}
+	nu := *u
+	setDiscoverStub(stubPieceDiscovery{bases: []*url.URL{&nu}})
 }
 
 func freeCarHandler(cid string, body []byte) http.HandlerFunc {
@@ -391,9 +405,7 @@ func TestCmdFetchDiscoverError(t *testing.T) {
 	keyHex, _ := testKeyHex(t)
 	restore := restoreHooks(t)
 	defer restore()
-	discoverPieceHTTPBases = func(ctx context.Context, cli *http.Client, pieceCID, lotusRPC string) ([]*url.URL, error) {
-		return nil, errors.New("discovery unavailable")
-	}
+	setDiscoverStub(stubPieceDiscovery{err: errors.New("discovery unavailable")})
 
 	cmd := root()
 	cmd.SetOut(io.Discard)
@@ -409,9 +421,7 @@ func TestCmdFetchDiscoverNoEndpoints(t *testing.T) {
 	keyHex, _ := testKeyHex(t)
 	restore := restoreHooks(t)
 	defer restore()
-	discoverPieceHTTPBases = func(ctx context.Context, cli *http.Client, pieceCID, lotusRPC string) ([]*url.URL, error) {
-		return nil, nil
-	}
+	setDiscoverStub(stubPieceDiscovery{})
 
 	cmd := root()
 	cmd.SetOut(io.Discard)

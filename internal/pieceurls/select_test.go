@@ -185,20 +185,6 @@ func TestSelectBestPieceSource_NilClient(t *testing.T) {
 	}
 }
 
-func TestPackageSelectBestPieceSourceWrapper(t *testing.T) {
-	const cid = "bafkreieuudnwcbsdc4aknumlx2hkj3c5ipq5ixhb2gbi4n35phf4cara6i"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("x"))
-	}))
-	defer srv.Close()
-	u, _ := url.Parse(srv.URL)
-	sel, err := SelectBestPieceSource(context.Background(), srv.Client(), cid, "0x5", t.TempDir(), []*url.URL{u}, nil)
-	if err != nil || !sel.Free {
-		t.Fatalf("got %v free=%v", err, sel != nil && sel.Free)
-	}
-}
-
 func TestSanitizeFilename(t *testing.T) {
 	if sanitizeFilename("") != "piece" {
 		t.Fatal("empty")

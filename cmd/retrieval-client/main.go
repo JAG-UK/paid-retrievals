@@ -71,8 +71,15 @@ var filpayNewClient = func(ctx context.Context, rpcURL, privateKeyHex, privateKe
 	return filpay.NewClient(ctx, rpcURL, privateKeyHex, privateKeyFile, privateKeyEnv, paymentsAddress, opts...)
 }
 
-// discoverPieceHTTPBases is swapped in tests to avoid live filecoin.tools / Lotus discovery.
-var discoverPieceHTTPBases = pieceurls.DiscoverPieceHTTPBases
+// pieceDiscoveryClient discovers SP HTTP bases for a piece CID.
+type pieceDiscoveryClient interface {
+	DiscoverPieceHTTPBases(ctx context.Context, pieceCID string) ([]*url.URL, error)
+}
+
+// newPieceDiscoveryClient is swapped in tests to avoid live filecoin.tools / Lotus discovery.
+var newPieceDiscoveryClient = func(httpClient *http.Client, lotusRPC string) pieceDiscoveryClient {
+	return pieceurls.NewClient(httpClient, pieceurls.WithLotusRPC(lotusRPC))
+}
 
 // promptReader is swapped in tests (default stdin) for promptYesNo.
 var promptReader io.Reader = os.Stdin
@@ -156,6 +163,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 			// users can manually cancel if required
 			cli := &http.Client{}
 			discoverCli := &http.Client{Timeout: 90 * time.Second}
+			discovery := newPieceDiscoveryClient(discoverCli, payRPCURL)
 			pieceProber := pieceurls.NewClient(cli)
 			ctx := cmd.Context()
 			if ctx == nil {
@@ -178,7 +186,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 				if verbose {
 					fmt.Printf("  - discovering SP HTTP bases for CID %s (filecoin.tools + cid.contact / Lotus)\n", cid)
 				}
-				bases, derr := discoverPieceHTTPBases(ctx, discoverCli, cid, payRPCURL)
+				bases, derr := discovery.DiscoverPieceHTTPBases(ctx, cid)
 				if spOverride != "" {
 					ob, perr := url.Parse(spOverride)
 					if perr != nil {
@@ -428,6 +436,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 				}
 				cli := &http.Client{Timeout: 120 * time.Second}
 				discoverCli := &http.Client{Timeout: 90 * time.Second}
+				discovery := newPieceDiscoveryClient(discoverCli, payRPCURL)
 				pieceProber := pieceurls.NewClient(cli)
 				ctx := cmd.Context()
 				if ctx == nil {
@@ -460,7 +469,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 						bases = []*url.URL{&u}
 					} else {
 						var derr error
-						bases, derr = discoverPieceHTTPBases(ctx, discoverCli, cid, payRPCURL)
+						bases, derr = discovery.DiscoverPieceHTTPBases(ctx, cid)
 						if derr != nil {
 							return fmt.Errorf("discover endpoints for CID %s: %w", cid, derr)
 						}

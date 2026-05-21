@@ -3,8 +3,6 @@ package pieceurls
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"testing"
 )
 
@@ -28,36 +26,9 @@ func TestClientOptions(t *testing.T) {
 	}
 }
 
-func TestPackageFuncsDelegateToClient(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/piece/bafywrap" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		_, _ = w.Write([]byte(`{"data":[]}`))
-	}))
-	defer srv.Close()
-	cli := srv.Client()
-	if _, err := DiscoverPieceHTTPBases(context.Background(), cli, "", srv.URL); err == nil {
+func TestNewClientEmptyCID(t *testing.T) {
+	c := NewClient(&http.Client{}, WithLotusRPC("http://127.0.0.1:1234"))
+	if _, err := c.DiscoverPieceHTTPBases(context.Background(), "  "); err == nil {
 		t.Fatal("expected empty CID error")
 	}
-	sel, err := SelectBestPieceSource(context.Background(), cli,
-		"bafkreieuudnwcbsdc4aknumlx2hkj3c5ipq5ixhb2gbi4n35phf4cara6i",
-		"0x3333333333333333333333333333333333333333",
-		t.TempDir(),
-		[]*url.URL{mustParseURL(t, srv.URL)},
-		nil,
-	)
-	if err != nil || !sel.Free {
-		t.Fatalf("select wrapper: err=%v sel=%+v", err, sel)
-	}
-}
-
-func mustParseURL(t *testing.T, raw string) *url.URL {
-	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u
 }

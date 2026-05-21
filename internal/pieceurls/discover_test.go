@@ -132,16 +132,6 @@ func TestDiscoverPieceHTTPBases_LotusEmptyRPC(t *testing.T) {
 	}
 }
 
-func TestPackageDiscoverWrapper(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"data":[]}`))
-	}))
-	defer srv.Close()
-	if _, err := DiscoverPieceHTTPBases(context.Background(), srv.Client(), "bafy", srv.URL); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func discoveryTestClient(t *testing.T, srv *httptest.Server) *Client {
 	t.Helper()
 	return NewClient(srv.Client(),

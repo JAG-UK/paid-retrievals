@@ -1,10 +1,6 @@
 package pieceurls
 
-import (
-	"context"
-	"net/http"
-	"net/url"
-)
+import "net/http"
 
 const (
 	defaultFilecoinToolsAPI  = "https://api.filecoin.tools/api"
@@ -66,14 +62,4 @@ func NewClient(httpClient *http.Client, opts ...Option) *Client {
 		o(c)
 	}
 	return c
-}
-
-// DiscoverPieceHTTPBases returns unique SP HTTP bases that may serve /piece/<pieceCID>.
-func DiscoverPieceHTTPBases(ctx context.Context, cli *http.Client, pieceCID, lotusRPC string) ([]*url.URL, error) {
-	return NewClient(cli, WithLotusRPC(lotusRPC)).DiscoverPieceHTTPBases(ctx, pieceCID)
-}
-
-// SelectBestPieceSource probes candidate bases and picks the best free or paid source.
-func SelectBestPieceSource(ctx context.Context, cli *http.Client, pieceCID, client0x, outDir string, bases []*url.URL, log func(string, ...any)) (*Selection, error) {
-	return NewClient(cli).SelectBestPieceSource(ctx, pieceCID, client0x, outDir, bases, log)
 }
