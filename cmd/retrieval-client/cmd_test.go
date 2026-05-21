@@ -23,6 +23,12 @@ import (
 	"github.com/fidlabs/paid-retrievals/internal/mpp"
 )
 
+// Valid IPFS CIDs required for MPP WWW-Authenticate parsing (see internal/mpp validateIPFSCID).
+const (
+	testPieceCID  = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
+	testPieceCID2 = "bafkreieuudnwcbsdc4aknumlx2hkj3c5ipq5ixhb2gbi4n35phf4cara6i"
+)
+
 func restoreHooks(t *testing.T) func() {
 	t.Helper()
 	origNew, origDisc, origPrompt := filpayNewClient, discoverPieceHTTPBases, promptReader
@@ -204,7 +210,7 @@ func TestCmdFetchEmptyManifest(t *testing.T) {
 
 func TestCmdFetchPaidPieceWithMockFilpay(t *testing.T) {
 	const (
-		cid      = "bagaFetchTest1"
+		cid      = testPieceCID
 		dealUUID = "11111111-2222-3333-4444-555555555555"
 		payee    = "0x2222222222222222222222222222222222222222"
 	)
@@ -323,7 +329,7 @@ func TestCmdFetchInvalidSPBaseURL(t *testing.T) {
 }
 
 func TestCmdFetchFreeCAR(t *testing.T) {
-	const cid = "bagaFreeCar1"
+	const cid = testPieceCID
 	keyHex, clientAddr := testKeyHex(t)
 	restore := restoreHooks(t)
 	defer restore()
@@ -355,7 +361,7 @@ func TestCmdFetchFreeCAR(t *testing.T) {
 
 func TestCmdFetchUsesDiscoverInjection(t *testing.T) {
 	const (
-		cid      = "bagaDiscover1"
+		cid      = testPieceCID
 		dealUUID = "11111111-2222-3333-4444-555555555555"
 		payee    = "0x2222222222222222222222222222222222222222"
 	)
@@ -419,7 +425,7 @@ func TestCmdFetchDiscoverNoEndpoints(t *testing.T) {
 
 func TestCmdFetchAbortedAtPrompt(t *testing.T) {
 	const (
-		cid      = "bagaAbort1"
+		cid      = testPieceCID
 		dealUUID = "11111111-2222-3333-4444-555555555555"
 		payee    = "0x2222222222222222222222222222222222222222"
 	)
@@ -448,7 +454,7 @@ func TestCmdFetchAbortedAtPrompt(t *testing.T) {
 
 func TestCmdFetchSignerMismatch(t *testing.T) {
 	const (
-		cid      = "bagaMismatch1"
+		cid      = testPieceCID
 		dealUUID = "11111111-2222-3333-4444-555555555555"
 		payee    = "0x2222222222222222222222222222222222222222"
 	)
@@ -478,7 +484,7 @@ func TestCmdFetchSignerMismatch(t *testing.T) {
 
 func TestCmdFetchFilpayInitError(t *testing.T) {
 	const (
-		cid      = "bagaFilpayErr"
+		cid      = testPieceCID
 		dealUUID = "11111111-2222-3333-4444-555555555555"
 		payee    = "0x2222222222222222222222222222222222222222"
 	)
@@ -509,7 +515,7 @@ func TestCmdFetchFilpayInitError(t *testing.T) {
 
 func TestCmdFetchManifestE2E(t *testing.T) {
 	const (
-		cid      = "bagaManifest1"
+		cid      = testPieceCID
 		dealUUID = "11111111-2222-3333-4444-555555555555"
 		payee    = "0x2222222222222222222222222222222222222222"
 	)
@@ -541,7 +547,7 @@ func TestCmdFetchManifestE2E(t *testing.T) {
 
 func TestCmdFetchTwoPaidCIDs(t *testing.T) {
 	const payee = "0x2222222222222222222222222222222222222222"
-	cid1, cid2 := "bagaTwoA", "bagaTwoB"
+	cid1, cid2 := testPieceCID, testPieceCID2
 	keyHex, clientAddr := testKeyHex(t)
 	restore := restoreHooks(t)
 	defer restore()
@@ -574,7 +580,7 @@ func TestCmdFetchTwoPaidCIDs(t *testing.T) {
 
 func TestCmdRailCheckDiscoverProbe(t *testing.T) {
 	const (
-		cid      = "bagaRailProbe"
+		cid      = testPieceCID
 		dealUUID = "11111111-2222-3333-4444-555555555555"
 		payee    = "0x2222222222222222222222222222222222222222"
 	)
@@ -638,7 +644,7 @@ func TestCmdRailCheckInvalidRequiredUSDFC(t *testing.T) {
 }
 
 func TestCmdRailCheckInvalidChallengePayee(t *testing.T) {
-	const cid = "bagaBadPayee"
+	const cid = testPieceCID
 	keyHex, clientAddr := testKeyHex(t)
 	restore := restoreHooks(t)
 	defer restore()
