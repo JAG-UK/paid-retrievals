@@ -18,8 +18,6 @@ import (
 	"github.com/fidlabs/paid-retrievals/internal/paymentheader"
 )
 
-const probeParallel = 16
-
 // Selection is the winning source for one piece after probing candidate HTTP bases.
 type Selection struct {
 	Base      *url.URL
@@ -38,7 +36,10 @@ type Selection struct {
 // Any 200 response is treated as a free direct CAR download (saved under outDir).
 // Among 402 responses with a valid MPP WWW-Authenticate challenge, the lowest price_usdfc (parsed as base units) wins.
 // Other status codes and failures are ignored.
-func SelectBestPieceSource(ctx context.Context, cli *http.Client, pieceCID, client0x, outDir string, bases []*url.URL, log func(string, ...any)) (*Selection, error) {
+func (c *Client) SelectBestPieceSource(ctx context.Context, pieceCID, client0x, outDir string, bases []*url.URL, log func(string, ...any)) (*Selection, error) {
+	if c == nil || c.HTTP == nil {
+		return nil, fmt.Errorf("pieceurls: client or HTTP client is nil")
+	}
 	if len(bases) == 0 {
 		return nil, errors.New("no candidate bases to probe")
 	}
@@ -49,7 +50,11 @@ func SelectBestPieceSource(ctx context.Context, cli *http.Client, pieceCID, clie
 	var freeClaimed atomic.Bool
 	var freeResult atomic.Pointer[Selection]
 
-	sem := make(chan struct{}, probeParallel)
+	parallel := c.ProbeParallelism
+	if parallel <= 0 {
+		parallel = defaultProbeParallel
+	}
+	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
 
 	var mu sync.Mutex
@@ -71,7 +76,7 @@ func SelectBestPieceSource(ctx context.Context, cli *http.Client, pieceCID, clie
 			}
 			defer func() { <-sem }()
 
-			sel, err := probePieceEndpoint(ctx, cli, b, pieceCID, client0x, outDir, log, &freeClaimed, &freeResult, cancel)
+			sel, err := c.probePieceEndpoint(ctx, b, pieceCID, client0x, outDir, log, &freeClaimed, &freeResult, cancel)
 			if err != nil || sel == nil {
 				return
 			}
@@ -112,7 +117,7 @@ func cloneURLBase(b *url.URL) *url.URL {
 	return &u
 }
 
-func probePieceEndpoint(ctx context.Context, cli *http.Client, base *url.URL, cid, client0x, outDir string, log func(string, ...any), freeClaimed *atomic.Bool, freeResult *atomic.Pointer[Selection], cancel context.CancelFunc) (*Selection, error) {
+func (c *Client) probePieceEndpoint(ctx context.Context, base *url.URL, cid, client0x, outDir string, log func(string, ...any), freeClaimed *atomic.Bool, freeResult *atomic.Pointer[Selection], cancel context.CancelFunc) (*Selection, error) {
 	u := *base
 	u.Path = "/piece/" + cid
 	q := u.Query()
@@ -124,7 +129,7 @@ func probePieceEndpoint(ctx context.Context, cli *http.Client, base *url.URL, ci
 	if err != nil {
 		return nil, err
 	}
-	res, err := cli.Do(req)
+	res, err := c.HTTP.Do(req)
 	if err != nil {
 		if log != nil {
 			log("probe GET %s failed: %v", full, err)
