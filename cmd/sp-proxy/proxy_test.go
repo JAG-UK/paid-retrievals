@@ -1,0 +1,310 @@
+package main
+
+import (
+	"context"
+	"io"
+	"log/slog"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/fidlabs/paid-retrievals/internal/filpay"
+	"github.com/fidlabs/paid-retrievals/internal/sqlitestore"
+)
+
+const testQuotePayee0x = "0x2222222222222222222222222222222222222222"
+
+type stubFilpay struct {
+	signer   common.Address
+	payments common.Address
+	settle   func(ctx context.Context, payer, payee common.Address, price *big.Int) (string, error)
+	closed   bool
+}
+
+func (s *stubFilpay) SettleIfFunded(ctx context.Context, payer, payee common.Address, price *big.Int) (string, error) {
+	if s.settle != nil {
+		return s.settle(ctx, payer, payee, price)
+	}
+	return "0xstub", nil
+}
+
+func (s *stubFilpay) SignerAddress() common.Address   { return s.signer }
+func (s *stubFilpay) PaymentsAddress() common.Address { return s.payments }
+func (s *stubFilpay) Close()                          { s.closed = true }
+
+func stubFilpayFactory() newFilpayClientFunc {
+	return func(context.Context, string, string, string, string, string, ...filpay.Option) (proxyFilpay, error) {
+		return defaultStubFilpay(), nil
+	}
+}
+
+func defaultStubFilpay() *stubFilpay {
+	addr := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	return &stubFilpay{
+		signer:   addr,
+		payments: common.HexToAddress("0x3333333333333333333333333333333333333333"),
+	}
+}
+
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func openTestStore(t *testing.T) *sqlitestore.Store {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "sp.db")
+	s, err := sqlitestore.OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+func upstreamPieceServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.ipld.car")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("DUMMY-CAR"))
+	}))
+}
+
+func upstreamHostPort(t *testing.T, raw string) (string, int) {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, portStr, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return host, port
+}
+
+func TestValidateUpstream(t *testing.T) {
+	if _, err := validateUpstream("", 8788); err == nil {
+		t.Fatal("expected empty host error")
+	}
+	if _, err := validateUpstream("127.0.0.1", 0); err == nil {
+		t.Fatal("expected invalid port")
+	}
+	if _, err := validateUpstream("127.0.0.1", 70000); err == nil {
+		t.Fatal("expected port too large")
+	}
+	u, err := validateUpstream("127.0.0.1", 8788)
+	if err != nil || u.Host != "127.0.0.1:8788" {
+		t.Fatalf("got %v %v", u, err)
+	}
+}
+
+func TestResolvePayee(t *testing.T) {
+	stub := defaultStubFilpay()
+	got, err := resolvePayee("", stub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != stub.SignerAddress().Hex() {
+		t.Fatalf("default payee: got %s", got)
+	}
+	if _, err := resolvePayee("not-an-address", stub); err == nil {
+		t.Fatal("expected invalid payee")
+	}
+	custom := "0x4444444444444444444444444444444444444444"
+	got, err = resolvePayee(custom, stub)
+	if err != nil || got != custom {
+		t.Fatalf("custom payee: %v %s", err, got)
+	}
+}
+
+func TestBuildProxyHandlerRoutes(t *testing.T) {
+	upstream := upstreamPieceServer(t)
+	defer upstream.Close()
+
+	upURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, port := upstreamHostPort(t, upstream.URL)
+	store := openTestStore(t)
+	stub := defaultStubFilpay()
+	settings := proxyAppSettings{
+		PriceUSDFC:   "0.01",
+		ClientQuery:  "client",
+		ClientHeader: "X-Client-Address",
+		MaxSkewSec:   30,
+	}
+	h := buildProxyHandler(upURL, host, port, store, stub, testQuotePayee0x, settings, testLogger())
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	t.Run("health", func(t *testing.T) {
+		res, err := http.Get(ts.URL + "/health")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status %d", res.StatusCode)
+		}
+		body, _ := io.ReadAll(res.Body)
+		if string(body) != "ok" {
+			t.Fatalf("body %q", body)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		res, err := http.Get(ts.URL + "/other")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusNotFound {
+			t.Fatalf("status %d", res.StatusCode)
+		}
+	})
+
+	t.Run("method not allowed", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/health", nil)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("status %d", res.StatusCode)
+		}
+	})
+
+	t.Run("piece issues payment challenge", func(t *testing.T) {
+		client := "0x5555555555555555555555555555555555555555"
+		res, err := http.Get(ts.URL + "/piece/bafytestpiece?client=" + client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusPaymentRequired {
+			t.Fatalf("expected 402 got %d", res.StatusCode)
+		}
+		if !strings.Contains(res.Header.Get("WWW-Authenticate"), "Payment") {
+			t.Fatal("missing payment challenge header")
+		}
+	})
+}
+
+func TestRunProxyAppValidation(t *testing.T) {
+	defer restoreProxyHooks(t)()
+
+	proxyNewFilpayClient = stubFilpayFactory()
+	proxyListenAndServe = func(string, http.Handler) error { return nil }
+
+	settings := proxyAppSettings{
+		DBPath:       filepath.Join(t.TempDir(), "sp.db"),
+		UpstreamHost: "",
+		UpstreamPort: 8788,
+	}
+	if err := runProxyApp(settings); err == nil {
+		t.Fatal("expected upstream host error")
+	}
+
+	settings.UpstreamHost = "127.0.0.1"
+	settings.UpstreamPort = 0
+	if err := runProxyApp(settings); err == nil {
+		t.Fatal("expected invalid port")
+	}
+}
+
+func TestRunProxyAppInvalidPayee(t *testing.T) {
+	defer restoreProxyHooks(t)()
+
+	upstream := upstreamPieceServer(t)
+	defer upstream.Close()
+	host, port := upstreamHostPort(t, upstream.URL)
+
+	proxyOpenStore = sqlitestore.OpenStore
+	proxyNewFilpayClient = stubFilpayFactory()
+	proxyListenAndServe = func(string, http.Handler) error { return nil }
+
+	settings := proxyAppSettings{
+		DBPath:          filepath.Join(t.TempDir(), "sp.db"),
+		UpstreamHost:    host,
+		UpstreamPort:    port,
+		PayPayeeAddress: "not-an-address",
+	}
+	if err := runProxyApp(settings); err == nil {
+		t.Fatal("expected invalid payee")
+	}
+}
+
+func TestCobraExecuteStartsProxy(t *testing.T) {
+	defer restoreProxyHooks(t)()
+
+	upstream := upstreamPieceServer(t)
+	defer upstream.Close()
+	host, port := upstreamHostPort(t, upstream.URL)
+
+	var captured http.Handler
+	proxyOpenStore = sqlitestore.OpenStore
+	proxyNewFilpayClient = stubFilpayFactory()
+	proxyListenAndServe = func(addr string, h http.Handler) error {
+		captured = h
+		return nil
+	}
+
+	db := filepath.Join(t.TempDir(), "sp.db")
+	cmd := root()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{
+		"--db", db,
+		"--upstream-host", host,
+		"--upstream-port", strconv.Itoa(port),
+		"--pay-payee-address", testQuotePayee0x,
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if captured == nil {
+		t.Fatal("handler not captured")
+	}
+
+	ts := httptest.NewServer(captured)
+	defer ts.Close()
+	res, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+}
+
+func TestCobraInvalidUpstreamPort(t *testing.T) {
+	defer restoreProxyHooks(t)()
+	proxyNewFilpayClient = stubFilpayFactory()
+	proxyListenAndServe = func(string, http.Handler) error { return nil }
+
+	cmd := root()
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--upstream-port", "0"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error")
+	}
+}
