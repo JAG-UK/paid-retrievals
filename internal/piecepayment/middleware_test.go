@@ -155,7 +155,7 @@ func TestQuoteThenPaidSuccess(t *testing.T) {
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
-	cid := "bafyquote"
+	cid := "bafkreidde4sfyosf2pm6u4vxb65wogjg464a6y6tcg75opo6q5wv34bley"
 	quoteReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/"+cid+"?client="+client, nil)
 	quoteRes, err := http.DefaultClient.Do(quoteReq)
 	if err != nil {
@@ -219,7 +219,8 @@ func TestReplayNonceRejected(t *testing.T) {
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
-	qres, err := http.Get(ts.URL + "/piece/bafyrepl1?client=" + client)
+	const replayCID = "bafkreierdmi2f7hhmec5awa7ed2wtc46uhywmsquzq7lztdyu5rskuucqe"
+	qres, err := http.Get(ts.URL + "/piece/" + replayCID + "?client=" + client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,9 +231,9 @@ func TestReplayNonceRejected(t *testing.T) {
 		ChallengeID:   challenge.ID,
 		DealUUID:      challenge.Request.DealUUID,
 		ClientAddress: client,
-		CID:           "bafyrepl1",
+		CID:           replayCID,
 		Method:        http.MethodGet,
-		Path:          "/piece/bafyrepl1",
+		Path:          "/piece/" + replayCID,
 		Host:          mustHostFromURL(t, ts.URL),
 		Nonce:         "same-nonce",
 		ExpiresUnix:   time.Now().Add(time.Minute).Unix(),
@@ -245,7 +246,7 @@ func TestReplayNonceRejected(t *testing.T) {
 	hdr.Signature = sig
 	raw := mustAuthorization(t, *challenge, hdr)
 
-	req1, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/bafyrepl1", nil)
+	req1, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/"+replayCID, nil)
 	req1.Header.Set("Authorization", raw)
 	res1, err := http.DefaultClient.Do(req1)
 	if err != nil {
@@ -256,7 +257,7 @@ func TestReplayNonceRejected(t *testing.T) {
 		t.Fatalf("expected first 200 got %d", res1.StatusCode)
 	}
 
-	req2, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/bafyrepl1", nil)
+	req2, _ := http.NewRequest(http.MethodGet, ts.URL+"/piece/"+replayCID, nil)
 	req2.Header.Set("Authorization", raw)
 	res2, err := http.DefaultClient.Do(req2)
 	if err != nil {

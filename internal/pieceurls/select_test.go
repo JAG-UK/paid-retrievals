@@ -47,7 +47,7 @@ func mpp402Handler(cid, dealUUID, price, payee string) http.HandlerFunc {
 }
 
 func TestSelectBestPieceSource_Cheapest402(t *testing.T) {
-	const cid = "baga6ea4seaq"
+	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
 	const payee = "0x2222222222222222222222222222222222222222"
 
 	sHigh := httptest.NewServer(mpp402Handler(cid, "11111111-1111-1111-1111-111111111111", "5.0", payee))
@@ -82,7 +82,7 @@ func TestSelectBestPieceSource_Cheapest402(t *testing.T) {
 }
 
 func TestSelectBestPieceSource_FreeBeatsPaid(t *testing.T) {
-	const cid = "bagaFree"
+	const cid = "bafkreieuudnwcbsdc4aknumlx2hkj3c5ipq5ixhb2gbi4n35phf4cara6i"
 	const payee = "0x4444444444444444444444444444444444444444"
 
 	sPaid := httptest.NewServer(mpp402Handler(cid, "33333333-3333-3333-3333-333333333333", "0.001", payee))

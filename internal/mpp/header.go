@@ -89,6 +89,9 @@ func (h *ProofPayload) Validate() error {
 	if h.ChallengeID == "" || h.DealUUID == "" || h.ClientAddress == "" || h.CID == "" {
 		return ErrInvalidHeader
 	}
+	if err := validateIPFSCID(h.CID); err != nil {
+		return err
+	}
 	if h.Method == "" || h.Path == "" || h.Host == "" || h.Nonce == "" || h.SigType == "" || h.Signature == "" {
 		return ErrInvalidHeader
 	}
@@ -194,6 +197,9 @@ func ParseWWWAuthenticate(v string) (*Challenge, error) {
 	}
 	if err := json.Unmarshal(reqBytes, &ch.Request); err != nil {
 		return nil, fmt.Errorf("%w: request json", ErrInvalidHeader)
+	}
+	if err := validateIPFSCID(ch.Request.CID); err != nil {
+		return nil, err
 	}
 	if opaqueB64 := strings.TrimSpace(params["opaque"]); opaqueB64 != "" {
 		opaqueRaw, err := base64.RawURLEncoding.DecodeString(opaqueB64)
