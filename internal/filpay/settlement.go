@@ -14,7 +14,6 @@ import (
 	"github.com/data-preservation-programs/go-synapse/constants"
 	"github.com/data-preservation-programs/go-synapse/contracts"
 	synpayments "github.com/data-preservation-programs/go-synapse/payments"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -84,8 +83,8 @@ const withdrawABIJSON = `[
 
 // Client performs Filecoin Pay reads and settlement txs using USDFC on the connected chain.
 type Client struct {
-	eth          *ethclient.Client
-	payments     *contracts.PaymentsContract
+	eth          ethClient
+	payments     paymentsAPI
 	chainID      *big.Int
 	signerKey    *ecdsa.PrivateKey
 	signerAddr   common.Address
@@ -93,6 +92,12 @@ type Client struct {
 	paymentToken common.Address // USDFC for the chain
 	log          *slog.Logger
 	payTrace     bool // Info-level step logs (--pay-debug); independent of global log level
+
+	// Optional test hooks (nil uses eth / bind.WaitMined / ERC20 bind).
+	rails       paymentsRailsTransactor
+	waitMined   func(ctx context.Context, tx *types.Transaction) (*types.Receipt, error)
+	usdfc       erc20API
+	blockNumber func(ctx context.Context) (uint64, error)
 }
 
 type OperatorApprovalStatus struct {
@@ -138,33 +143,33 @@ func NewClient(ctx context.Context, rpcURL, privateKeyHex, privateKeyFile, priva
 	if err != nil {
 		return nil, err
 	}
-	eth, err := ethclient.DialContext(ctx, rpcURL)
+	ethCli, err := ethclient.DialContext(ctx, rpcURL)
 	if err != nil {
 		return nil, fmt.Errorf("filpay: dial RPC: %w", err)
 	}
-	chainID, err := eth.ChainID(ctx)
+	chainID, err := ethCli.ChainID(ctx)
 	if err != nil {
-		eth.Close()
+		ethCli.Close()
 		return nil, fmt.Errorf("filpay: chain ID: %w", err)
 	}
 	payAddr := resolvePaymentsAddress(strings.TrimSpace(paymentsAddress), chainID.Int64())
 	if payAddr == (common.Address{}) {
-		eth.Close()
+		ethCli.Close()
 		return nil, fmt.Errorf("filpay: unknown payments contract for chain %d (set payments address explicitly)", chainID.Int64())
 	}
 	tokenAddr, err := resolvePaymentToken(chainID.Int64())
 	if err != nil {
-		eth.Close()
+		ethCli.Close()
 		return nil, err
 	}
-	pc, err := contracts.NewPaymentsContract(payAddr, eth)
+	pc, err := contracts.NewPaymentsContract(payAddr, ethCli)
 	if err != nil {
-		eth.Close()
+		ethCli.Close()
 		return nil, fmt.Errorf("filpay: bind payments: %w", err)
 	}
 	addr := crypto.PubkeyToAddress(pk.PublicKey)
 	c := &Client{
-		eth:          eth,
+		eth:          ethCli,
 		payments:     pc,
 		chainID:      chainID,
 		signerKey:    pk,
@@ -328,18 +333,16 @@ func (c *Client) CreateTokenRail(ctx context.Context, payer, payee common.Addres
 	if payer != c.signerAddr {
 		return "", fmt.Errorf("filpay: payer %s does not match signer %s for createRail", payer.Hex(), c.signerAddr.Hex())
 	}
-	parsed, err := abi.JSON(strings.NewReader(createRailABIJSON))
+	rails, err := c.railsTransactor()
 	if err != nil {
-		return "", fmt.Errorf("filpay: parse createRail ABI: %w", err)
+		return "", err
 	}
-	bound := bind.NewBoundContract(c.paymentsAddr, parsed, c.eth, c.eth, c.eth)
-	opts, err := bind.NewKeyedTransactorWithChainID(c.signerKey, c.chainID)
+	opts, err := c.transactOpts(ctx)
 	if err != nil {
-		return "", fmt.Errorf("filpay: transactor: %w", err)
+		return "", err
 	}
-	opts.Context = ctx
 	c.payInfo("submitting createRail", "payer", payer.Hex(), "payee", payee.Hex(), "operator", c.signerAddr.Hex())
-	tx, err := bound.Transact(opts, "createRail", c.paymentToken, payer, payee, common.Address{}, big.NewInt(0), common.Address{})
+	tx, err := rails.CreateTokenRail(ctx, opts, payer, payee)
 	if err != nil {
 		return "", fmt.Errorf("filpay: createRail: %w", err)
 	}
@@ -364,18 +367,16 @@ func (c *Client) ChargeRailOneTime(ctx context.Context, payer, payee common.Addr
 	if err := c.EnsureRailLockup(ctx, railID, amountBaseUnits); err != nil {
 		return "", err
 	}
-	parsed, err := abi.JSON(strings.NewReader(modifyRailPaymentABIJSON))
+	rails, err := c.railsTransactor()
 	if err != nil {
-		return "", fmt.Errorf("filpay: parse modifyRailPayment ABI: %w", err)
+		return "", err
 	}
-	bound := bind.NewBoundContract(c.paymentsAddr, parsed, c.eth, c.eth, c.eth)
-	opts, err := bind.NewKeyedTransactorWithChainID(c.signerKey, c.chainID)
+	opts, err := c.transactOpts(ctx)
 	if err != nil {
-		return "", fmt.Errorf("filpay: transactor: %w", err)
+		return "", err
 	}
-	opts.Context = ctx
 	c.payInfo("submitting modifyRailPayment one-time charge", "rail_id", railID.String(), "payer", payer.Hex(), "payee", payee.Hex(), "one_time_payment_base_units", amountBaseUnits.String())
-	tx, err := bound.Transact(opts, "modifyRailPayment", railID, big.NewInt(0), amountBaseUnits)
+	tx, err := rails.ModifyRailPayment(ctx, opts, railID, amountBaseUnits)
 	if err != nil {
 		return "", fmt.Errorf("filpay: modifyRailPayment: %w", err)
 	}
@@ -411,19 +412,17 @@ func (c *Client) EnsureRailLockup(ctx context.Context, railID, requiredBaseUnits
 		c.payInfo("rail lockup already sufficient", "rail_id", railID.String(), "lockup_fixed_base_units", currentFixed.String(), "required_base_units", requiredBaseUnits.String())
 		return nil
 	}
-	parsed, err := abi.JSON(strings.NewReader(modifyRailLockupABIJSON))
+	rails, err := c.railsTransactor()
 	if err != nil {
-		return fmt.Errorf("filpay: parse modifyRailLockup ABI: %w", err)
+		return err
 	}
-	bound := bind.NewBoundContract(c.paymentsAddr, parsed, c.eth, c.eth, c.eth)
-	opts, err := bind.NewKeyedTransactorWithChainID(c.signerKey, c.chainID)
+	opts, err := c.transactOpts(ctx)
 	if err != nil {
-		return fmt.Errorf("filpay: transactor: %w", err)
+		return err
 	}
-	opts.Context = ctx
 	period := big.NewInt(0)
 	c.payInfo("submitting modifyRailLockup", "rail_id", railID.String(), "old_lockup_fixed_base_units", currentFixed.String(), "new_lockup_fixed_base_units", requiredBaseUnits.String(), "period", period.String())
-	tx, err := bound.Transact(opts, "modifyRailLockup", railID, period, requiredBaseUnits)
+	tx, err := rails.ModifyRailLockup(ctx, opts, railID, period, requiredBaseUnits)
 	if err != nil {
 		return fmt.Errorf("filpay: modifyRailLockup: %w", err)
 	}
@@ -448,18 +447,16 @@ func (c *Client) WithdrawTokenAvailable(ctx context.Context, owner common.Addres
 		c.payInfo("no tokens available to withdraw", "owner", owner.Hex())
 		return "", big.NewInt(0), nil
 	}
-	parsed, err := abi.JSON(strings.NewReader(withdrawABIJSON))
+	rails, err := c.railsTransactor()
 	if err != nil {
-		return "", nil, fmt.Errorf("filpay: parse withdraw ABI: %w", err)
+		return "", nil, err
 	}
-	bound := bind.NewBoundContract(c.paymentsAddr, parsed, c.eth, c.eth, c.eth)
-	opts, err := bind.NewKeyedTransactorWithChainID(c.signerKey, c.chainID)
+	opts, err := c.transactOpts(ctx)
 	if err != nil {
-		return "", nil, fmt.Errorf("filpay: transactor: %w", err)
+		return "", nil, err
 	}
-	opts.Context = ctx
 	c.payInfo("submitting token withdraw", "owner", owner.Hex(), "amount_base_units", avail.String())
-	tx, err := bound.Transact(opts, "withdraw", c.paymentToken, avail)
+	tx, err := rails.WithdrawToken(ctx, opts, avail)
 	if err != nil {
 		return "", nil, fmt.Errorf("filpay: withdraw: %w", err)
 	}
@@ -489,9 +486,9 @@ func (c *Client) EnsurePayerTokenBalance(ctx context.Context, payer common.Addre
 	}
 	deficit := new(big.Int).Sub(requiredBaseUnits, avail)
 
-	usdfc, err := contracts.NewERC20Contract(c.paymentToken, c.eth)
+	usdfc, err := c.erc20()
 	if err != nil {
-		return fmt.Errorf("filpay: bind USDFC: %w", err)
+		return err
 	}
 	walletBal, err := usdfc.BalanceOf(ctx, payer)
 	if err != nil {
@@ -525,9 +522,9 @@ func (c *Client) EnsurePayerTokenBalance(ctx context.Context, payer common.Addre
 }
 
 func (c *Client) ensureUSDFCApproval(ctx context.Context, owner common.Address, amount *big.Int) error {
-	usdfc, err := contracts.NewERC20Contract(c.paymentToken, c.eth)
+	usdfc, err := c.erc20()
 	if err != nil {
-		return fmt.Errorf("filpay: bind USDFC: %w", err)
+		return err
 	}
 	allowance, err := usdfc.Allowance(ctx, owner, c.paymentsAddr)
 	if err != nil {
@@ -563,7 +560,7 @@ func (c *Client) waitTxMined(ctx context.Context, tx *types.Transaction, op stri
 		defer cancel()
 	}
 	c.payInfo("waiting for tx confirmation", "operation", op, "tx_hash", tx.Hash().Hex())
-	receipt, err := bind.WaitMined(waitCtx, c.eth, tx)
+	receipt, err := c.receiptForTx(waitCtx, tx)
 	if err != nil {
 		return fmt.Errorf("filpay: wait mined (%s): %w", op, err)
 	}
@@ -682,7 +679,7 @@ func (c *Client) SettleIfFunded(ctx context.Context, payer, payee common.Address
 	} else {
 		c.payInfo("balance check ok", "available_base_units", avail.String(), "required_base_units", priceBaseUnits.String())
 	}
-	until, err := c.eth.BlockNumber(ctx)
+	until, err := c.latestBlockNumber(ctx)
 	if err != nil {
 		return "", fmt.Errorf("filpay: latest block number: %w", err)
 	}
@@ -713,6 +710,41 @@ func (c *Client) SettleIfFunded(ctx context.Context, payer, payee common.Address
 		c.payInfo("withdraw after settle", "withdraw_tx", withdrawTx, "amount_base_units", amountBaseUnits.String(), "owner", payee.Hex())
 	}
 	return h, nil
+}
+
+func (c *Client) erc20() (erc20API, error) {
+	if c.usdfc != nil {
+		return c.usdfc, nil
+	}
+	cli, ok := c.eth.(*ethclient.Client)
+	if !ok || cli == nil {
+		return nil, errors.New("filpay: no eth client for USDFC")
+	}
+	erc, err := contracts.NewERC20Contract(c.paymentToken, cli)
+	if err != nil {
+		return nil, fmt.Errorf("filpay: bind USDFC: %w", err)
+	}
+	return erc, nil
+}
+
+func (c *Client) latestBlockNumber(ctx context.Context) (uint64, error) {
+	if c.blockNumber != nil {
+		return c.blockNumber(ctx)
+	}
+	if c.eth == nil {
+		return 0, errors.New("filpay: no eth client for block number")
+	}
+	return c.eth.BlockNumber(ctx)
+}
+
+func (c *Client) receiptForTx(ctx context.Context, tx *types.Transaction) (*types.Receipt, error) {
+	if c.waitMined != nil {
+		return c.waitMined(ctx, tx)
+	}
+	if c.eth == nil {
+		return nil, errors.New("filpay: no eth client for tx wait")
+	}
+	return bind.WaitMined(ctx, c.eth, tx)
 }
 
 func resolvePaymentToken(chainID int64) (common.Address, error) {
