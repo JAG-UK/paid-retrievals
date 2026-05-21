@@ -52,6 +52,31 @@ type challengeItem struct {
 	Challenge  mpp.Challenge
 }
 
+// filpayOperations is the Filecoin Pay surface used by fetch/rail-check (mockable in tests).
+type filpayOperations interface {
+	Close()
+	SignerAddress() common.Address
+	ChainID() *big.Int
+	PaymentsAddress() common.Address
+	OperatorApproval(ctx context.Context, payer, operator common.Address) (*filpay.OperatorApprovalStatus, error)
+	AccountInfoIfSettled(ctx context.Context, payer common.Address) (fundedUntilEpoch, currentFunds, availableFunds, currentLockupRate *big.Int, err error)
+	FindActiveTokenRail(ctx context.Context, payer, payee common.Address) (*big.Int, error)
+	ListTokenRailsAsPayer(ctx context.Context, payer common.Address) ([]filpay.TokenRailDetail, error)
+	PreparePayerForPayee(ctx context.Context, payer, payee common.Address, requiredBaseUnits *big.Int) error
+	ChargeRailOneTime(ctx context.Context, payer, payee common.Address, amountBaseUnits *big.Int) (string, error)
+}
+
+// filpayNewClient is swapped in tests to avoid live RPC during command runs.
+var filpayNewClient = func(ctx context.Context, rpcURL, privateKeyHex, privateKeyFile, privateKeyEnv, paymentsAddress string, opts ...filpay.Option) (filpayOperations, error) {
+	return filpay.NewClient(ctx, rpcURL, privateKeyHex, privateKeyFile, privateKeyEnv, paymentsAddress, opts...)
+}
+
+// discoverPieceHTTPBases is swapped in tests to avoid live filecoin.tools / Lotus discovery.
+var discoverPieceHTTPBases = pieceurls.DiscoverPieceHTTPBases
+
+// promptReader is swapped in tests (default stdin) for promptYesNo.
+var promptReader io.Reader = os.Stdin
+
 func main() {
 	if err := root().ExecuteContext(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -152,7 +177,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 				if verbose {
 					fmt.Printf("  - discovering SP HTTP bases for CID %s (filecoin.tools + cid.contact / Lotus)\n", cid)
 				}
-				bases, derr := pieceurls.DiscoverPieceHTTPBases(ctx, discoverCli, cid, payRPCURL)
+				bases, derr := discoverPieceHTTPBases(ctx, discoverCli, cid, payRPCURL)
 				if spOverride != "" {
 					ob, perr := url.Parse(spOverride)
 					if perr != nil {
@@ -230,7 +255,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 				}
 				filpayLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 			}
-			fc, err := filpay.NewClient(
+			fc, err := filpayNewClient(
 				context.Background(),
 				payRPCURL,
 				keyOpts.privateKey,
@@ -373,7 +398,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 			if payDebug {
 				filpayLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 			}
-			fc, err := filpay.NewClient(
+			fc, err := filpayNewClient(
 				context.Background(),
 				payRPCURL,
 				keyOpts.privateKey,
@@ -433,7 +458,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 						bases = []*url.URL{&u}
 					} else {
 						var derr error
-						bases, derr = pieceurls.DiscoverPieceHTTPBases(ctx, discoverCli, cid, payRPCURL)
+						bases, derr = discoverPieceHTTPBases(ctx, discoverCli, cid, payRPCURL)
 						if derr != nil {
 							return fmt.Errorf("discover endpoints for CID %s: %w", cid, derr)
 						}
@@ -600,7 +625,7 @@ func addFilpayKeyFlags(c *cobra.Command, opts *filpayKeyOpts) {
 	c.PersistentFlags().StringVar(&opts.privateKeyEnv, "filpay-private-key-env", getenv("FILPAY_PRIVATE_KEY_ENV", "FILPAY_PRIVATE_KEY"), "Env var for hex client key")
 }
 
-func prepareRailsForChallenges(ctx context.Context, fc *filpay.Client, client string, items []challengeItem, payDebug bool) error {
+func prepareRailsForChallenges(ctx context.Context, fc filpayOperations, client string, items []challengeItem, payDebug bool) error {
 	payer := common.HexToAddress(client)
 	byPayee := map[string]*big.Int{}
 	for _, it := range items {
@@ -667,7 +692,7 @@ func prepareRailsForChallenges(ctx context.Context, fc *filpay.Client, client st
 	return nil
 }
 
-func chargeRailsForChallenges(ctx context.Context, fc *filpay.Client, client string, items []challengeItem, payDebug bool) error {
+func chargeRailsForChallenges(ctx context.Context, fc filpayOperations, client string, items []challengeItem, payDebug bool) error {
 	payer := common.HexToAddress(client)
 	byPayee := map[string]*big.Int{}
 	for _, it := range items {
@@ -833,7 +858,7 @@ func extractPieceCIDsFromManifest(manifestPath string) ([]string, error) {
 
 func promptYesNo(prompt string) (bool, error) {
 	fmt.Print(prompt)
-	r := bufio.NewReader(os.Stdin)
+	r := bufio.NewReader(promptReader)
 	line, err := r.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
