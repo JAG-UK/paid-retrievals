@@ -122,9 +122,6 @@ func downloadFreeCAR(cli *http.Client, base *url.URL, cid, client0x, outDir stri
 	u := *base
 	piecePath := "/piece/" + cid
 	u.Path = piecePath
-	q := u.Query()
-	q.Set("client", client0x)
-	u.RawQuery = q.Encode()
 	return downloadCAR(cli, &u, cid, piecePath, "", outDir, expectedTotal, ui, payDebug)
 }
 
