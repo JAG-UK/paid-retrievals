@@ -71,7 +71,9 @@ func openTestStore(t *testing.T) *sqlitestore.Store {
 func upstreamPieceServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Upstream-Method", r.Method)
 		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "13")
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -204,6 +206,49 @@ func TestBuildProxyHandlerRoutes(t *testing.T) {
 		}
 		if !strings.Contains(res.Header.Get("WWW-Authenticate"), "Payment") {
 			t.Fatal("missing payment challenge header")
+		}
+	})
+
+	t.Run("piece HEAD proxied to upstream", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodHead, ts.URL+"/piece/bafytestpiece", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 got %d", res.StatusCode)
+		}
+		if res.Header.Get("X-Upstream-Method") != http.MethodHead {
+			t.Fatalf("upstream method %q", res.Header.Get("X-Upstream-Method"))
+		}
+		if res.ContentLength != 13 {
+			t.Fatalf("Content-Length=%d", res.ContentLength)
+		}
+		body, _ := io.ReadAll(res.Body)
+		if len(body) != 0 {
+			t.Fatalf("HEAD body len=%d", len(body))
+		}
+	})
+
+	t.Run("health HEAD", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodHead, ts.URL+"/health", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status %d", res.StatusCode)
+		}
+		if n, _ := io.ReadAll(res.Body); len(n) != 0 {
+			t.Fatalf("HEAD body len=%d", len(n))
 		}
 	})
 }

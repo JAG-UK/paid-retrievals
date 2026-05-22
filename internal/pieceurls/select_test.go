@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,9 +66,8 @@ func TestSelectBestPieceSource_Cheapest402(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir := t.TempDir()
 	c := NewClient(&http.Client{Timeout: 30 * time.Second})
-	sel, err := c.SelectBestPieceSource(context.Background(), cid, "0x3333333333333333333333333333333333333333", dir, []*url.URL{uHigh, uLow}, nil)
+	sel, err := c.SelectBestPieceSource(context.Background(), cid, "0x3333333333333333333333333333333333333333", []*url.URL{uHigh, uLow}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,13 +89,23 @@ func TestSelectBestPieceSource_FreeBeatsPaid(t *testing.T) {
 	sPaid := httptest.NewServer(mpp402Handler(cid, "33333333-3333-3333-3333-333333333333", "0.001", payee))
 	defer sPaid.Close()
 
+	body := []byte("fake-car-bytes")
 	sFree := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/piece/"+cid {
 			http.NotFound(w, r)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("fake-car-bytes"))
+		switch r.Method {
+		case http.MethodHead:
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(body)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}))
 	defer sFree.Close()
 
@@ -104,25 +114,27 @@ func TestSelectBestPieceSource_FreeBeatsPaid(t *testing.T) {
 
 	dir := t.TempDir()
 	c := NewClient(&http.Client{Timeout: 30 * time.Second})
-	sel, err := c.SelectBestPieceSource(context.Background(), cid, "0x5555555555555555555555555555555555555555", dir, []*url.URL{uPaid, uFree}, nil)
+	sel, err := c.SelectBestPieceSource(context.Background(), cid, "0x5555555555555555555555555555555555555555", []*url.URL{uPaid, uFree}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !sel.Free {
 		t.Fatalf("expected free selection")
 	}
-	b, err := os.ReadFile(filepath.Join(dir, sanitizeFilename(cid)+".car"))
-	if err != nil {
-		t.Fatal(err)
+	if sel.TotalBytes != int64(len(body)) {
+		t.Fatalf("TotalBytes=%d want %d", sel.TotalBytes, len(body))
 	}
-	if string(b) != "fake-car-bytes" {
-		t.Fatalf("unexpected CAR body %q", string(b))
+	if sel.SavedPath != "" {
+		t.Fatalf("probe must not download CAR, got SavedPath=%q", sel.SavedPath)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sanitizeFilename(cid)+".car")); !os.IsNotExist(err) {
+		t.Fatalf("probe must not create CAR on disk: %v", err)
 	}
 }
 
 func TestSelectBestPieceSource_NoBases(t *testing.T) {
 	c := NewClient(&http.Client{})
-	_, err := c.SelectBestPieceSource(context.Background(), "bafy", "0x1", t.TempDir(), nil, nil)
+	_, err := c.SelectBestPieceSource(context.Background(), "bafy", "0x1", nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "no candidate bases") {
 		t.Fatalf("got %v", err)
 	}
@@ -136,7 +148,7 @@ func TestSelectBestPieceSource_NoUsableEndpoint(t *testing.T) {
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
 	c := NewClient(srv.Client())
-	_, err := c.SelectBestPieceSource(context.Background(), cid, "0x2", t.TempDir(), []*url.URL{u}, nil)
+	_, err := c.SelectBestPieceSource(context.Background(), cid, "0x2", []*url.URL{u}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "no usable endpoint") {
 		t.Fatalf("got %v", err)
 	}
@@ -153,7 +165,7 @@ func TestSelectBestPieceSource_Bad402Header(t *testing.T) {
 	var logs []string
 	logFn := func(format string, args ...any) { logs = append(logs, format) }
 	c := NewClient(srv.Client())
-	_, err := c.SelectBestPieceSource(context.Background(), cid, "0x3", t.TempDir(), []*url.URL{u}, logFn)
+	_, err := c.SelectBestPieceSource(context.Background(), cid, "0x3", []*url.URL{u}, logFn, nil)
 	if err == nil || !strings.Contains(err.Error(), "no usable endpoint") {
 		t.Fatalf("got %v", err)
 	}
@@ -171,7 +183,7 @@ func TestSelectBestPieceSource_InvalidChallengePayload(t *testing.T) {
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
 	c := NewClient(srv.Client())
-	_, err := c.SelectBestPieceSource(context.Background(), cid, "0x4", t.TempDir(), []*url.URL{u}, nil)
+	_, err := c.SelectBestPieceSource(context.Background(), cid, "0x4", []*url.URL{u}, nil, nil)
 	if err == nil {
 		t.Fatal("expected no usable endpoint")
 	}
@@ -179,7 +191,7 @@ func TestSelectBestPieceSource_InvalidChallengePayload(t *testing.T) {
 
 func TestSelectBestPieceSource_NilClient(t *testing.T) {
 	var c *Client
-	_, err := c.SelectBestPieceSource(context.Background(), "bafy", "0x1", t.TempDir(), []*url.URL{{Scheme: "http", Host: "h"}}, nil)
+	_, err := c.SelectBestPieceSource(context.Background(), "bafy", "0x1", []*url.URL{{Scheme: "http", Host: "h"}}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "nil") {
 		t.Fatalf("got %v", err)
 	}

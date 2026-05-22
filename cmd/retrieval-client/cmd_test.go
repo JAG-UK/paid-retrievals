@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -73,12 +74,20 @@ func stubDiscoverURL(t *testing.T, raw string) {
 
 func freeCarHandler(cid string, body []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/piece/"+cid {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(body)
+		if r.URL.Path != "/piece/"+cid {
+			http.NotFound(w, r)
 			return
 		}
-		http.NotFound(w, r)
+		switch r.Method {
+		case http.MethodHead, http.MethodGet:
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			w.WriteHeader(http.StatusOK)
+			if r.Method == http.MethodGet {
+				_, _ = w.Write(body)
+			}
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}
 }
 
@@ -171,6 +180,42 @@ func TestCmdFetchMissingPrivateKey(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "private key") {
 		t.Fatalf("got %v stderr=%s", err, errBuf.String())
 	}
+	if strings.Contains(errBuf.String(), "Usage:") {
+		t.Fatalf("runtime error should not print usage, stderr=%s", errBuf.String())
+	}
+}
+
+func TestCmdFetchUnknownFlagShowsUsage(t *testing.T) {
+	keyHex, _ := testKeyHex(t)
+	cmd := root()
+	var errBuf, outBuf bytes.Buffer
+	cmd.SetErr(&errBuf)
+	cmd.SetOut(&outBuf)
+	cmd.SetArgs([]string{"fetch", "--filpay-private-key", keyHex, "--not-a-real-flag"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	combined := errBuf.String() + outBuf.String()
+	if !strings.Contains(combined, "Usage:") || !strings.Contains(combined, "unknown flag") {
+		t.Fatalf("expected usage after unknown flag, got stderr=%q stdout=%q err=%v", errBuf.String(), outBuf.String(), err)
+	}
+}
+
+func TestCmdFetchNoCIDsNoUsage(t *testing.T) {
+	keyHex, _ := testKeyHex(t)
+	var errBuf bytes.Buffer
+	cmd := root()
+	cmd.SetErr(&errBuf)
+	cmd.SetOut(io.Discard)
+	cmd.SetArgs([]string{"fetch", "--filpay-private-key", keyHex})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "at least one CID") {
+		t.Fatalf("got %v", err)
+	}
+	if strings.Contains(errBuf.String(), "Usage:") {
+		t.Fatalf("validation error should not print usage, stderr=%s", errBuf.String())
+	}
 }
 
 func TestCmdFetchManifestExclusive(t *testing.T) {
@@ -189,18 +234,6 @@ func TestCmdFetchManifestExclusive(t *testing.T) {
 	})
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Fatalf("got %v", err)
-	}
-}
-
-func TestCmdFetchNoCIDs(t *testing.T) {
-	keyHex, _ := testKeyHex(t)
-	cmd := root()
-	cmd.SetErr(io.Discard)
-	cmd.SetOut(io.Discard)
-	cmd.SetArgs([]string{"fetch", "--filpay-private-key", keyHex})
-	err := cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), "at least one CID") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -430,6 +463,79 @@ func TestCmdFetchDiscoverNoEndpoints(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "no HTTP endpoints") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCmdFetchDryRunNoFilpay(t *testing.T) {
+	const (
+		cid      = testPieceCID
+		dealUUID = "11111111-2222-3333-4444-555555555555"
+		payee    = "0x2222222222222222222222222222222222222222"
+	)
+	keyHex, clientAddr := testKeyHex(t)
+	restore := restoreHooks(t)
+	defer restore()
+
+	ts := httptest.NewServer(mpp402Handler(cid, dealUUID, "0.01", payee))
+	defer ts.Close()
+	stubDiscoverURL(t, ts.URL)
+	var filpayCalls int
+	filpayNewClient = func(context.Context, string, string, string, string, string, ...filpay.Option) (filpayOperations, error) {
+		filpayCalls++
+		return &mockFilpayOps{signer: clientAddr}, nil
+	}
+
+	var buf bytes.Buffer
+	cmd := root()
+	cmd.SetOut(&buf)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{
+		"fetch", "--filpay-private-key", keyHex, "--dry-run",
+		"--sp-base-url", ts.URL, "--cid", cid, "--out-dir", t.TempDir(),
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if filpayCalls != 0 {
+		t.Fatalf("filpay client created %d times, want 0 for --dry-run", filpayCalls)
+	}
+	if !strings.Contains(buf.String(), "Quote only") {
+		t.Fatalf("output %q", buf.String())
+	}
+}
+
+func TestCmdFetchAbortedAtPromptNoPrepare(t *testing.T) {
+	const (
+		cid      = testPieceCID
+		dealUUID = "11111111-2222-3333-4444-555555555555"
+		payee    = "0x2222222222222222222222222222222222222222"
+	)
+	keyHex, clientAddr := testKeyHex(t)
+	restore := restoreHooks(t)
+	defer restore()
+
+	ts := httptest.NewServer(mpp402Handler(cid, dealUUID, "0.01", payee))
+	defer ts.Close()
+	stubDiscoverURL(t, ts.URL)
+	mock := &mockFilpayOps{signer: clientAddr}
+	filpayNewClient = func(context.Context, string, string, string, string, string, ...filpay.Option) (filpayOperations, error) {
+		return mock, nil
+	}
+	promptReader = strings.NewReader("no\n")
+
+	cmd := root()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{
+		"fetch", "--filpay-private-key", keyHex,
+		"--sp-base-url", ts.URL, "--cid", cid, "--out-dir", t.TempDir(),
+	})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "aborted") {
+		t.Fatalf("got %v", err)
+	}
+	if mock.prepareCalls != 0 || mock.chargeCalls != 0 {
+		t.Fatalf("prepare=%d charge=%d, want 0 before confirm", mock.prepareCalls, mock.chargeCalls)
 	}
 }
 
