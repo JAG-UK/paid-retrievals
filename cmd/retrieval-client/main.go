@@ -806,16 +806,6 @@ func chargeRailsForChallenges(ctx context.Context, fc filpayOperations, client s
 	return nil
 }
 
-func countFree(items []challengeItem) int {
-	n := 0
-	for _, it := range items {
-		if it.Free {
-			n++
-		}
-	}
-	return n
-}
-
 func collectCIDs(flagCIDs []string, cidFile string, args []string) ([]string, error) {
 	seen := map[string]struct{}{}
 	var out []string

@@ -36,8 +36,8 @@ func probeLogToStdout(format string) bool {
 
 // probeUIAdapter maps pieceurls probe callbacks to CLI progress spinners.
 type probeUIAdapter struct {
-	ui        ProgressUI
-	pieceIdx  int
+	ui         ProgressUI
+	pieceIdx   int
 	pieceTotal int
 }
 
