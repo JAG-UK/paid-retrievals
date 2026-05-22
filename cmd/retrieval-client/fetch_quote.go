@@ -89,7 +89,7 @@ func printFetchQuote(out io.Writer, items []challengeItem, totalUSDFC string) {
 			fmt.Fprintf(out, "; %d free", free)
 		}
 		fmt.Fprintln(out, ".")
-		fmt.Fprintln(out, "Chain: prepare may submit several transactions (~60s each on calibration), then one charge per payee.")
+		fmt.Fprintln(out, "Chain: this may take some time - several transactions to prepare then one charge per payee, each ~30s.")
 	} else {
 		fmt.Fprintf(out, "All %d piece(s) are free; no Filecoin Pay charge required.\n", free)
 	}
