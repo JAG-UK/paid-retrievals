@@ -92,6 +92,7 @@ type Client struct {
 	paymentToken common.Address // USDFC for the chain
 	log          *slog.Logger
 	payTrace     bool // Info-level step logs (--pay-debug); independent of global log level
+	txProgress   TxProgress
 
 	// Optional test hooks (nil uses eth / bind.WaitMined / ERC20 bind).
 	rails       paymentsRailsTransactor
@@ -559,8 +560,19 @@ func (c *Client) waitTxMined(ctx context.Context, tx *types.Transaction, op stri
 		waitCtx, cancel = context.WithTimeout(ctx, 90*time.Second)
 		defer cancel()
 	}
-	c.payInfo("waiting for tx confirmation", "operation", op, "tx_hash", tx.Hash().Hex())
+	txHash := tx.Hash().Hex()
+	c.payInfo("waiting for tx confirmation", "operation", op, "tx_hash", txHash)
+	if c.txProgress != nil {
+		c.txProgress.TxSubmitted(op, txHash)
+	}
+	start := time.Now()
+	done := make(chan struct{})
+	if c.txProgress != nil {
+		go c.runTxWaitProgress(op, txHash, start, done)
+	}
 	receipt, err := c.receiptForTx(waitCtx, tx)
+	close(done)
+	elapsed := time.Since(start)
 	if err != nil {
 		return fmt.Errorf("filpay: wait mined (%s): %w", op, err)
 	}
@@ -568,10 +580,27 @@ func (c *Client) waitTxMined(ctx context.Context, tx *types.Transaction, op stri
 		return fmt.Errorf("filpay: wait mined (%s): nil receipt", op)
 	}
 	if receipt.Status != types.ReceiptStatusSuccessful {
-		return fmt.Errorf("filpay: %s tx reverted: %s", op, tx.Hash().Hex())
+		return fmt.Errorf("filpay: %s tx reverted: %s", op, txHash)
 	}
-	c.payInfo("tx confirmed", "operation", op, "tx_hash", tx.Hash().Hex(), "block", receipt.BlockNumber.String())
+	block := receipt.BlockNumber.String()
+	c.payInfo("tx confirmed", "operation", op, "tx_hash", txHash, "block", block)
+	if c.txProgress != nil {
+		c.txProgress.TxConfirmed(op, txHash, elapsed, block)
+	}
 	return nil
+}
+
+func (c *Client) runTxWaitProgress(op, txHash string, start time.Time, done <-chan struct{}) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			c.txProgress.TxWaiting(op, txHash, time.Since(start))
+		}
+	}
 }
 
 // PreparePayerForPayee tries to set operator approval and fund payer account.

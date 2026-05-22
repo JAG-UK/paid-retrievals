@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"path/filepath"
 	"strconv"
@@ -71,13 +72,34 @@ func openTestStore(t *testing.T) *sqlitestore.Store {
 func upstreamPieceServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Upstream-Method", r.Method)
 		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "13")
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 		w.Header().Set("Content-Type", "application/vnd.ipld.car")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("DUMMY-CAR"))
+	}))
+}
+
+func upstreamChunkedPieceServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	const body = "CHUNKED-CAR-BODY"
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Upstream-Method", r.Method)
+		w.Header().Set("X-Upstream-Chunked", "1")
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.ipld.car")
+		// No Content-Length: net/http uses chunked framing on the wire.
+		_, _ = w.Write([]byte(body))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
 	}))
 }
 
@@ -96,6 +118,89 @@ func upstreamHostPort(t *testing.T, raw string) (string, int) {
 		t.Fatal(err)
 	}
 	return host, port
+}
+
+func TestPreserveUpstreamContentLength(t *testing.T) {
+	t.Run("chunked passthrough", func(t *testing.T) {
+		resp := &http.Response{
+			Header:        http.Header{"Transfer-Encoding": {"chunked"}},
+			ContentLength: -1,
+		}
+		if err := preserveUpstreamContentLength(resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Header.Get("Transfer-Encoding") != "chunked" {
+			t.Fatal("Transfer-Encoding should remain for chunked upstream")
+		}
+		if resp.ContentLength != -1 {
+			t.Fatalf("ContentLength=%d", resp.ContentLength)
+		}
+	})
+	t.Run("content length without chunked", func(t *testing.T) {
+		resp := &http.Response{
+			Header:        http.Header{"Content-Length": {"99"}},
+			ContentLength: -1,
+		}
+		if err := preserveUpstreamContentLength(resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.ContentLength != 99 {
+			t.Fatalf("ContentLength=%d", resp.ContentLength)
+		}
+	})
+	t.Run("content length plus chunked prefers chunked", func(t *testing.T) {
+		resp := &http.Response{
+			Header: http.Header{
+				"Content-Length":    {"99"},
+				"Transfer-Encoding": {"chunked"},
+			},
+			ContentLength: -1,
+		}
+		if err := preserveUpstreamContentLength(resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Header.Get("Transfer-Encoding") != "chunked" {
+			t.Fatal("should not strip chunked encoding")
+		}
+		if resp.ContentLength != -1 {
+			t.Fatalf("ContentLength=%d", resp.ContentLength)
+		}
+	})
+}
+
+func TestReverseProxyPreservesChunkedUpstream(t *testing.T) {
+	upstream := upstreamChunkedPieceServer(t)
+	defer upstream.Close()
+	upURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(upURL)
+	proxy.ModifyResponse = preserveUpstreamContentLength
+	ts := httptest.NewServer(proxy)
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+	if res.Header.Get("X-Upstream-Chunked") != "1" {
+		t.Fatal("expected upstream chunked marker header")
+	}
+	if cl := res.Header.Get("Content-Length"); cl != "" {
+		t.Fatalf("chunked upstream should not get a synthetic Content-Length header, got %q", cl)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "CHUNKED-CAR-BODY" {
+		t.Fatalf("body %q", body)
+	}
 }
 
 func TestValidateUpstream(t *testing.T) {
@@ -204,6 +309,49 @@ func TestBuildProxyHandlerRoutes(t *testing.T) {
 		}
 		if !strings.Contains(res.Header.Get("WWW-Authenticate"), "Payment") {
 			t.Fatal("missing payment challenge header")
+		}
+	})
+
+	t.Run("piece HEAD proxied to upstream", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodHead, ts.URL+"/piece/bafytestpiece", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 got %d", res.StatusCode)
+		}
+		if res.Header.Get("X-Upstream-Method") != http.MethodHead {
+			t.Fatalf("upstream method %q", res.Header.Get("X-Upstream-Method"))
+		}
+		if res.ContentLength != 13 {
+			t.Fatalf("Content-Length=%d", res.ContentLength)
+		}
+		body, _ := io.ReadAll(res.Body)
+		if len(body) != 0 {
+			t.Fatalf("HEAD body len=%d", len(body))
+		}
+	})
+
+	t.Run("health HEAD", func(t *testing.T) {
+		req, err := http.NewRequest(http.MethodHead, ts.URL+"/health", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status %d", res.StatusCode)
+		}
+		if n, _ := io.ReadAll(res.Body); len(n) != 0 {
+			t.Fatalf("HEAD body len=%d", len(n))
 		}
 	})
 }

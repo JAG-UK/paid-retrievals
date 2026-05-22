@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -45,7 +44,7 @@ type challengeItem struct {
 	CID        string
 	Base       *url.URL
 	Free       bool
-	SavedPath  string
+	TotalBytes int64 // from probe HEAD; -1 when unknown
 	DealUUID   string
 	PriceUSDFC string
 	Payee0x    string
@@ -100,6 +99,7 @@ func root() *cobra.Command {
 	addFilpayKeyFlags(r, keyOpts)
 	r.AddCommand(cmdFetch(keyOpts))
 	r.AddCommand(cmdRailCheck(keyOpts))
+	initCLIUsage(r)
 	return r
 }
 
@@ -111,6 +111,8 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 		cidFile            string
 		manifest           string
 		yes                bool
+		dryRun             bool
+		noProgress         bool
 		expiresIn          int
 		verbose            bool
 		payDebug           bool
@@ -159,32 +161,35 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 			if err := os.MkdirAll(outDir, 0o755); err != nil {
 				return err
 			}
-			// We don't set a timeout for the client as download of a payload can take a very long time
-			// users can manually cancel if required
+			// Probe uses a bounded client; paid/free downloads use an unlimited client (large CARs).
+			probeCli := &http.Client{Timeout: 60 * time.Second}
 			cli := &http.Client{}
 			discoverCli := &http.Client{Timeout: 90 * time.Second}
 			discovery := newPieceDiscoveryClient(discoverCli, payRPCURL)
-			pieceProber := pieceurls.NewClient(cli)
+			pieceProber := pieceurls.NewClient(probeCli)
 			ctx := cmd.Context()
 			if ctx == nil {
 				ctx = context.Background()
 			}
 
-			probeLog := func(format string, args ...any) {
-				if payDebug {
-					payClientLog(format, args...)
-				}
-			}
+			probeLog := makeProbeLog(cmd.OutOrStdout(), verbose, payDebug)
 			spOverride := strings.TrimSpace(spBaseURL)
+			ui := newProgressUI(os.Stderr, noProgress)
 
 			items := make([]challengeItem, 0, len(allCIDs))
-			if verbose {
-				fmt.Printf("Step 1/%d: probing discovered SP bases for %d CID(s)\n", 2, len(allCIDs))
+			if verbose && !ui.Enabled() {
+				fmt.Printf("Step 1/2: probing discovered SP bases for %d CID(s)\n", len(allCIDs))
+			}
+			if ui.Enabled() {
+				ui.Phase(fmt.Sprintf("probing %d piece(s)", len(allCIDs)))
 			}
 
-			for _, cid := range allCIDs {
-				if verbose {
+			for i, cid := range allCIDs {
+				if verbose && !ui.Enabled() {
 					fmt.Printf("  - discovering SP HTTP bases for CID %s (filecoin.tools + cid.contact / Lotus)\n", cid)
+				}
+				if ui.Enabled() {
+					ui.PieceProbe(i+1, len(allCIDs), cid, "discovering SP HTTP bases")
 				}
 				bases, derr := discovery.DiscoverPieceHTTPBases(ctx, cid)
 				if spOverride != "" {
@@ -209,20 +214,31 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 						return fmt.Errorf("discover: no HTTP endpoints for CID %s (empty filecoin.tools search or no resolvable multiaddrs); use --sp-base-url to force a proxy", cid)
 					}
 					if verbose {
-						fmt.Printf("    found %d unique base URL(s); probing for free CAR or 402 MPP challenge\n", len(bases))
+						fmt.Printf("    found %d endpoint(s) for CID %s:\n", len(bases), cid)
+						for _, b := range bases {
+							if b != nil {
+								fmt.Printf("      %s\n", b.String())
+							}
+						}
 					}
 				}
 
-				sel, err := pieceProber.SelectBestPieceSource(ctx, cid, client, outDir, bases, probeLog)
+				sel, err := pieceProber.SelectBestPieceSource(ctx, cid, client, bases, probeLog, probeCallbackFor(ui, i+1, len(allCIDs)))
 				if err != nil {
+					if ui.Enabled() {
+						ui.ProbeEndpointsEnd(i+1, len(allCIDs), cid, "")
+					}
 					return fmt.Errorf("dataset incomplete: no usable source for CID %s: %w", cid, err)
+				}
+				if ui.Enabled() {
+					ui.ProbeEndpointsEnd(i+1, len(allCIDs), cid, probeSelectionSummary(sel))
 				}
 				if payDebug && !sel.Free && strings.TrimSpace(sel.Payee0x) != "" {
 					payClientLog("selected payee_0x=%s (fund/open rail payer=client → payee); SP settles on paid GET", sel.Payee0x)
 				}
 				if verbose {
 					if sel.Free {
-						fmt.Printf("    free CAR from %s -> %s\n", sel.Base.String(), sel.SavedPath)
+						fmt.Printf("    free direct from %s (download after confirm)\n", sel.Base.String())
 					} else {
 						line := fmt.Sprintf("    selected %s — CID %s costs %s USDFC (deal %s)", sel.Base.String(), cid, sel.PriceUSDFC, sel.DealUUID)
 						if strings.TrimSpace(sel.Payee0x) != "" {
@@ -235,7 +251,7 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 					CID:        cid,
 					Base:       sel.Base,
 					Free:       sel.Free,
-					SavedPath:  sel.SavedPath,
+					TotalBytes: sel.TotalBytes,
 					DealUUID:   sel.DealUUID,
 					PriceUSDFC: sel.PriceUSDFC,
 					Payee0x:    strings.TrimSpace(sel.Payee0x),
@@ -254,38 +270,12 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("sum token values: %w", err)
 			}
-			fmt.Printf("Total required amount: %s USDFC for %d piece(s).\n", total, len(items))
+			stdout := cmd.OutOrStdout()
+			printFetchQuote(stdout, items, total)
 
-			var filpayLogger *slog.Logger
-			if payDebug || verbose {
-				level := slog.LevelInfo
-				if verbose {
-					level = slog.LevelDebug
-				}
-				filpayLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-			}
-			fc, err := filpayNewClient(
-				context.Background(),
-				payRPCURL,
-				keyOpts.privateKey,
-				keyOpts.privateKeyFile,
-				keyOpts.privateKeyEnv,
-				payPaymentsAddress,
-				filpay.WithPayLogging(filpayLogger, payDebug || verbose),
-			)
-			if err != nil {
-				return fmt.Errorf("init filpay client for rail setup: %w", err)
-			}
-			defer fc.Close()
-			if fc.SignerAddress().Hex() != client {
-				return fmt.Errorf("derived client %s does not match filpay signer %s", client, fc.SignerAddress().Hex())
-			}
-			prepStart := time.Now()
-			if err := prepareRailsForChallenges(context.Background(), fc, client, items, payDebug); err != nil {
-				return err
-			}
-			if payDebug || verbose {
-				payClientLog("prepare phase complete in %s", time.Since(prepStart).Round(time.Millisecond))
+			if dryRun {
+				fmt.Fprintln(stdout, "\nQuote only (--dry-run): no chain transactions or downloads.")
+				return nil
 			}
 
 			if !yes {
@@ -297,6 +287,55 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 					return errors.New("aborted")
 				}
 			}
+
+			var filpayOpts []filpay.Option
+			if payDebug || verbose {
+				level := slog.LevelInfo
+				if verbose {
+					level = slog.LevelDebug
+				}
+				filpayLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+				filpayOpts = append(filpayOpts, filpay.WithPayLogging(filpayLogger, payDebug || verbose))
+			}
+			if ui.Enabled() {
+				filpayOpts = append(filpayOpts, filpay.WithTxProgress(ui))
+			}
+			fc, err := filpayNewClient(
+				context.Background(),
+				payRPCURL,
+				keyOpts.privateKey,
+				keyOpts.privateKeyFile,
+				keyOpts.privateKeyEnv,
+				payPaymentsAddress,
+				filpayOpts...,
+			)
+			if err != nil {
+				return fmt.Errorf("init filpay client for rail setup: %w", err)
+			}
+			defer fc.Close()
+			if fc.SignerAddress().Hex() != client {
+				return fmt.Errorf("derived client %s does not match filpay signer %s", client, fc.SignerAddress().Hex())
+			}
+
+			paidPayees := countPaidPayees(items)
+			if ui.Enabled() {
+				ui.Phase(fmt.Sprintf("preparing Filecoin Pay (%d payee(s))", paidPayees))
+			} else if verbose {
+				fmt.Println("Preparing Filecoin Pay rails…")
+			}
+			prepStart := time.Now()
+			if err := prepareRailsForChallenges(context.Background(), fc, client, items, payDebug); err != nil {
+				return err
+			}
+			if payDebug || verbose {
+				payClientLog("prepare phase complete in %s", time.Since(prepStart).Round(time.Millisecond))
+			}
+
+			if ui.Enabled() {
+				ui.Phase(fmt.Sprintf("charging rails (%d payee(s))", paidPayees))
+			} else if verbose {
+				fmt.Println("Charging rails…")
+			}
 			chargeStart := time.Now()
 			if err := chargeRailsForChallenges(context.Background(), fc, client, items, payDebug); err != nil {
 				return err
@@ -304,21 +343,31 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 			if payDebug || verbose {
 				payClientLog("charge phase complete in %s", time.Since(chargeStart).Round(time.Millisecond))
 			}
-			if verbose {
-				fmt.Printf("Step 2/%d: fetching paid pieces for %d CID(s)\n", 2, len(items))
+			if verbose && !ui.Enabled() {
+				fmt.Printf("Step 2/2: fetching pieces for %d CID(s)\n", len(items))
+			}
+			if ui.Enabled() {
+				ui.Phase("downloading pieces")
 			}
 
+			dlIndex := 0
 			for _, it := range items {
+				if it.Base == nil {
+					return fmt.Errorf("internal: missing base URL for CID %s", it.CID)
+				}
+				dlIndex++
+				if ui.Enabled() {
+					ui.PieceProbe(dlIndex, len(items), it.CID, "downloading")
+				}
 				if it.Free {
 					if verbose {
-						fmt.Printf("  - CID %s already stored (free): %s\n", it.CID, it.SavedPath)
-					} else {
-						fmt.Printf("stored %s (free)\n", it.SavedPath)
+						fmt.Printf("  - downloading free CAR for CID %s from %s\n", it.CID, it.Base.String())
+					}
+					err = downloadFreeCAR(cli, it.Base, it.CID, client, outDir, it.TotalBytes, ui, payDebug)
+					if err != nil {
+						return err
 					}
 					continue
-				}
-				if it.Base == nil {
-					return fmt.Errorf("internal: missing base URL for paid CID %s", it.CID)
 				}
 				piecePath := "/piece/" + it.CID
 				if verbose {
@@ -353,14 +402,9 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				outPath, err := downloadCAR(cli, it.Base, it.CID, piecePath, authz, outDir, payDebug)
+				err = downloadCAR(cli, it.Base, it.CID, piecePath, authz, outDir, it.TotalBytes, ui, payDebug)
 				if err != nil {
 					return err
-				}
-				if verbose {
-					fmt.Printf("    piece stored: CID %s -> %s\n", it.CID, outPath)
-				} else {
-					fmt.Printf("stored %s\n", outPath)
 				}
 			}
 			fmt.Println("Fetch complete.")
@@ -373,6 +417,8 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 	c.Flags().StringVar(&cidFile, "cid-file", "", "File with CIDs (newline or comma separated)")
 	c.Flags().StringVar(&manifest, "manifest", "", "Path to data-prep-standard super-manifest JSON (extract pieces[].piece_cid)")
 	c.Flags().BoolVar(&yes, "yes", false, "Skip interactive confirmation")
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "Probe and print quote only; no chain transactions or downloads")
+	c.Flags().BoolVar(&noProgress, "no-progress", false, "Disable progress output (default: on when stderr is a terminal)")
 	c.Flags().IntVar(&expiresIn, "expires-in-sec", 120, "Header expiry interval in seconds")
 	c.Flags().BoolVar(&verbose, "verbose", false, "Print detailed per-step progress output")
 	c.Flags().BoolVar(&payDebug, "pay-debug", false, "Log Filecoin Pay–related client steps to stderr ([filpay-client])")
@@ -448,12 +494,6 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 					}
 				}
 				spOverride := strings.TrimSpace(spBaseURL)
-				probeDir, err := os.MkdirTemp("", "retrieval-client-railcheck-*")
-				if err != nil {
-					return err
-				}
-				defer os.RemoveAll(probeDir)
-
 				for _, cid := range allCIDs {
 					var bases []*url.URL
 					if spOverride != "" {
@@ -477,7 +517,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 							return fmt.Errorf("discover: no HTTP endpoints for CID %s; use --sp-base-url to force a proxy", cid)
 						}
 					}
-					sel, err := pieceProber.SelectBestPieceSource(ctx, cid, client, probeDir, bases, probeLog)
+					sel, err := pieceProber.SelectBestPieceSource(ctx, cid, client, bases, probeLog, nil)
 					if err != nil {
 						return fmt.Errorf("no usable source for CID %s: %w", cid, err)
 					}
@@ -488,6 +528,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 						CID:        cid,
 						Base:       sel.Base,
 						Free:       false,
+						TotalBytes: sel.TotalBytes,
 						DealUUID:   sel.DealUUID,
 						PriceUSDFC: sel.PriceUSDFC,
 						Payee0x:    strings.TrimSpace(sel.Payee0x),
@@ -743,58 +784,6 @@ func chargeRailsForChallenges(ctx context.Context, fc filpayOperations, client s
 		}
 	}
 	return nil
-}
-
-func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, authorization, outDir string, payDebug bool) (string, error) {
-	u := *base
-	u.Path = piecePath
-	fullURL := u.String()
-	if payDebug {
-		payClientLog("paid GET %s (Authorization: Payment len=%d)", fullURL, len(authorization))
-	}
-	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", authorization)
-	res, err := cli.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer res.Body.Close()
-	if payDebug {
-		payClientLog("paid GET response status=%d for cid=%s", res.StatusCode, cid)
-	}
-	if res.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-		if payDebug {
-			payClientLog("paid GET error body (truncated): %s", truncateForLog(string(b), 512))
-		}
-		trimmed := strings.TrimSpace(string(b))
-		var pd problemDetails
-		if err := json.Unmarshal(b, &pd); err == nil && pd.Type != "" {
-			msg := fmt.Sprintf("download %s failed: %s", cid, res.Status)
-			if pd.Title != "" {
-				msg += " - " + pd.Title
-			}
-			if pd.Detail != "" {
-				msg += ": " + pd.Detail
-			}
-			msg += fmt.Sprintf(" (type=%s)", pd.Type)
-			return "", errors.New(msg)
-		}
-		return "", fmt.Errorf("download %s failed: %s %s", cid, res.Status, trimmed)
-	}
-	outPath := filepath.Join(outDir, sanitizeFilename(cid)+".car")
-	f, err := os.Create(outPath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	if _, err := io.Copy(f, res.Body); err != nil {
-		return "", err
-	}
-	return outPath, nil
 }
 
 func collectCIDs(flagCIDs []string, cidFile string, args []string) ([]string, error) {

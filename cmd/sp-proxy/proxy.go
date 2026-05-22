@@ -76,6 +76,7 @@ func buildProxyHandler(
 	logger *slog.Logger,
 ) http.Handler {
 	upstreamProxy := httputil.NewSingleHostReverseProxy(upstreamURL)
+	upstreamProxy.ModifyResponse = preserveUpstreamContentLength
 	upstreamProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		logger.Error("upstream proxy request failed", "host", upstreamHost, "port", upstreamPort, "path", r.URL.Path, "error", err)
 		http.Error(w, "bad gateway", http.StatusBadGateway)
@@ -101,7 +102,7 @@ func buildProxyHandler(
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		logger.Debug("incoming request", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
-		if r.Method != http.MethodGet {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			logger.Warn("method not allowed", "method", r.Method, "path", r.URL.Path)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -109,6 +110,10 @@ func buildProxyHandler(
 		if r.URL.Path == "/health" {
 			logger.Debug("health check")
 			w.Header().Set("Content-Type", "text/plain")
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			_, _ = w.Write([]byte("ok"))
 			return
 		}
@@ -159,4 +164,36 @@ func runProxyApp(settings proxyAppSettings) error {
 	logger.Info("sp-proxy listening", "listen", settings.Listen, "db", settings.DBPath, "price_usdfc", settings.PriceUSDFC, "verbose", settings.Verbose)
 
 	return proxyListenAndServe(settings.Listen, handler)
+}
+
+// preserveUpstreamContentLength sets resp.ContentLength from a Content-Length header
+// when the upstream response is not chunked. Chunked responses are passed through
+// unchanged so streaming SPs work; retrieval clients use probe HEAD for size hints.
+func preserveUpstreamContentLength(resp *http.Response) error {
+	if responseUsesChunkedEncoding(resp) {
+		return nil
+	}
+	if resp.ContentLength >= 0 {
+		return nil
+	}
+	cl := strings.TrimSpace(resp.Header.Get("Content-Length"))
+	if cl == "" {
+		return nil
+	}
+	n, err := strconv.ParseInt(cl, 10, 64)
+	if err != nil || n < 0 {
+		return nil
+	}
+	resp.ContentLength = n
+	return nil
+}
+
+func responseUsesChunkedEncoding(resp *http.Response) bool {
+	te := strings.ToLower(resp.Header.Get("Transfer-Encoding"))
+	for _, part := range strings.Split(te, ",") {
+		if strings.TrimSpace(part) == "chunked" {
+			return true
+		}
+	}
+	return false
 }

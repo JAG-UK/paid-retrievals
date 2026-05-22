@@ -41,6 +41,12 @@ func (svc *RetrievalService) PiecePaymentMiddleware(MaxHeaderSize int) func(http
 				return
 			}
 
+			// HEAD is proxied for size probes; payment applies on GET only.
+			if r.Method == http.MethodHead {
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			rawHdr := strings.TrimSpace(r.Header.Get("Authorization"))
 			if rawHdr == "" {
 				// If there is no authorization header, we need to check if the upstream exists before issuing a payment challenge

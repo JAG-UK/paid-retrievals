@@ -374,6 +374,39 @@ func TestUpstreamMissingReturnsStatus(t *testing.T) {
 	}
 }
 
+func TestPieceHEADPassthrough(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+	cfg := pp.Config{Store: s, FilecoinPay: &mockPaySettler{}, QuotePayee0x: testQuotePayee0x}
+	svc := pp.NewRetrievalService(cfg)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead {
+			http.Error(w, "expected HEAD", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Length", "99")
+		w.WriteHeader(http.StatusOK)
+	})
+	ts := httptest.NewServer(svc.PiecePaymentMiddleware(4096)(next))
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodHead, ts.URL+"/piece/"+testPieceCID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+	if res.ContentLength != 99 {
+		t.Fatalf("Content-Length=%d", res.ContentLength)
+	}
+}
+
 func TestMalformedAuthorizationProblem(t *testing.T) {
 	s := newTestStore(t)
 	defer s.Close()

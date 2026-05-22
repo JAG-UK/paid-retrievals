@@ -10,6 +10,7 @@ require (
 	github.com/multiformats/go-multiaddr v0.13.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sync v0.20.0
+	golang.org/x/term v0.42.0
 	modernc.org/sqlite v1.50.0
 )
 

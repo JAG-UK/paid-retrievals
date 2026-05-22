@@ -8,8 +8,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,23 +18,25 @@ import (
 
 // Selection is the winning source for one piece after probing candidate HTTP bases.
 type Selection struct {
-	Base      *url.URL
-	CID       string
-	Free      bool
-	SavedPath string
+	Base *url.URL
+	CID  string
+	Free bool
 
 	DealUUID   string
 	PriceUSDFC string
 	Payee0x    string
 	// Challenge is set for paid (402) selections; parsed from WWW-Authenticate (MPP).
 	Challenge mpp.Challenge
+
+	// TotalBytes is the CAR size when known from a probe HEAD 200 (-1 otherwise).
+	TotalBytes int64
 }
 
-// SelectBestPieceSource probes GET {base}/piece/{cid}?client=… for each base (concurrently).
-// Any 200 response is treated as a free direct CAR download (saved under outDir).
+// SelectBestPieceSource probes each base with HEAD (size) and GET {base}/piece/{cid}?client=… (concurrently).
+// Any GET 200 marks the piece as free (response body is not downloaded during probe).
 // Among 402 responses with a valid MPP WWW-Authenticate challenge, the lowest price_usdfc (parsed as base units) wins.
 // Other status codes and failures are ignored.
-func (c *Client) SelectBestPieceSource(ctx context.Context, pieceCID, client0x, outDir string, bases []*url.URL, log func(string, ...any)) (*Selection, error) {
+func (c *Client) SelectBestPieceSource(ctx context.Context, pieceCID, client0x string, bases []*url.URL, log func(string, ...any), probe ProbeCallback) (*Selection, error) {
 	if c == nil || c.HTTP == nil {
 		return nil, fmt.Errorf("pieceurls: client or HTTP client is nil")
 	}
@@ -61,6 +61,17 @@ func (c *Client) SelectBestPieceSource(ctx context.Context, pieceCID, client0x, 
 	var bestPaid *Selection
 	var bestBaseUnits *big.Int
 
+	probeTotal := 0
+	for _, b := range bases {
+		if cloneURLBase(b) != nil {
+			probeTotal++
+		}
+	}
+	if probe != nil && probeTotal > 0 {
+		probe.ProbeStart(pieceCID, probeTotal)
+	}
+	var probeDone atomic.Int32
+
 	for _, b := range bases {
 		b := cloneURLBase(b)
 		if b == nil {
@@ -75,8 +86,14 @@ func (c *Client) SelectBestPieceSource(ctx context.Context, pieceCID, client0x, 
 			case sem <- struct{}{}:
 			}
 			defer func() { <-sem }()
+			defer func() {
+				if probe != nil {
+					done := int(probeDone.Add(1))
+					probe.ProbeFinished(pieceCID, done, probeTotal)
+				}
+			}()
 
-			sel, err := c.probePieceEndpoint(ctx, b, pieceCID, client0x, outDir, log, &freeClaimed, &freeResult, cancel)
+			sel, err := c.probePieceEndpoint(ctx, b, pieceCID, client0x, log, &freeClaimed, &freeResult, cancel)
 			if err != nil || sel == nil {
 				return
 			}
@@ -103,7 +120,7 @@ func (c *Client) SelectBestPieceSource(ctx context.Context, pieceCID, client0x, 
 	if bestPaid != nil {
 		return bestPaid, nil
 	}
-	return nil, fmt.Errorf("no usable endpoint for piece %s (no 200 CAR and no valid 402 MPP challenge)", pieceCID)
+	return nil, fmt.Errorf("no usable endpoint for piece %s (no free 200 endpoint and no valid 402 MPP challenge)", pieceCID)
 }
 
 func cloneURLBase(b *url.URL) *url.URL {
@@ -117,13 +134,18 @@ func cloneURLBase(b *url.URL) *url.URL {
 	return &u
 }
 
-func (c *Client) probePieceEndpoint(ctx context.Context, base *url.URL, cid, client0x, outDir string, log func(string, ...any), freeClaimed *atomic.Bool, freeResult *atomic.Pointer[Selection], cancel context.CancelFunc) (*Selection, error) {
+func (c *Client) probePieceEndpoint(ctx context.Context, base *url.URL, cid, client0x string, log func(string, ...any), freeClaimed *atomic.Bool, freeResult *atomic.Pointer[Selection], cancel context.CancelFunc) (*Selection, error) {
 	u := *base
 	u.Path = "/piece/" + cid
 	q := u.Query()
 	q.Set("client", client0x)
 	u.RawQuery = q.Encode()
 	full := u.String()
+	if log != nil {
+		log("probing endpoint %s", full)
+	}
+
+	totalBytes := c.probeHEAD(ctx, full, log)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)
 	if err != nil {
@@ -140,40 +162,20 @@ func (c *Client) probePieceEndpoint(ctx context.Context, base *url.URL, cid, cli
 
 	switch res.StatusCode {
 	case http.StatusOK:
+		// Do not drain the full CAR during probe (only checking availability).
+		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 8192))
 		if !freeClaimed.CompareAndSwap(false, true) {
-			_, _ = io.Copy(io.Discard, res.Body)
 			return nil, nil
 		}
-		writeOK := false
-		defer func() {
-			if !writeOK {
-				freeClaimed.Store(false)
-			}
-		}()
-		outPath := filepath.Join(outDir, sanitizeFilename(cid)+".car")
-		f, err := os.Create(outPath)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := io.Copy(f, res.Body); err != nil {
-			f.Close()
-			_ = os.Remove(outPath)
-			return nil, err
-		}
-		if err := f.Close(); err != nil {
-			_ = os.Remove(outPath)
-			return nil, err
-		}
-		writeOK = true
 		sel := &Selection{
-			Base:      cloneURLBase(base),
-			CID:       cid,
-			Free:      true,
-			SavedPath: outPath,
+			Base:       cloneURLBase(base),
+			CID:        cid,
+			Free:       true,
+			TotalBytes: totalBytes,
 		}
 		freeResult.Store(sel)
 		if log != nil {
-			log("probe free CAR cid=%s base=%s -> %s", cid, base.String(), outPath)
+			log("probe free endpoint cid=%s base=%s (HTTP 200, download deferred)", cid, base.String())
 		}
 		cancel()
 		return nil, nil
@@ -207,6 +209,7 @@ func (c *Client) probePieceEndpoint(ctx context.Context, base *url.URL, cid, cli
 			Base:       cloneURLBase(base),
 			CID:        cid,
 			Free:       false,
+			TotalBytes: totalBytes,
 			DealUUID:   ch.Request.DealUUID,
 			PriceUSDFC: ch.Request.PriceUSDFC,
 			Payee0x:    strings.TrimSpace(ch.Request.Payee0x),
@@ -220,6 +223,28 @@ func (c *Client) probePieceEndpoint(ctx context.Context, base *url.URL, cid, cli
 		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<16))
 		return nil, nil
 	}
+}
+
+func (c *Client) probeHEAD(ctx context.Context, full string, log func(string, ...any)) int64 {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, full, nil)
+	if err != nil {
+		return -1
+	}
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		if log != nil {
+			log("probe HEAD %s failed: %v", full, err)
+		}
+		return -1
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		if log != nil {
+			log("probe HEAD %s status=%d", full, res.StatusCode)
+		}
+		return -1
+	}
+	return ResponseTotalBytes(res)
 }
 
 func truncateForLog(s string, max int) string {
