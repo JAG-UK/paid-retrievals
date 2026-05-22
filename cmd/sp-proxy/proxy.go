@@ -166,12 +166,14 @@ func runProxyApp(settings proxyAppSettings) error {
 	return proxyListenAndServe(settings.Listen, handler)
 }
 
-// preserveUpstreamContentLength keeps a known body size on the client response.
-// ReverseProxy may use chunked encoding when Transfer-Encoding is set upstream,
-// which makes retrieval clients see ContentLength=-1 even with a Content-Length header.
+// preserveUpstreamContentLength sets resp.ContentLength from a Content-Length header
+// when the upstream response is not chunked. Chunked responses are passed through
+// unchanged so streaming SPs work; retrieval clients use probe HEAD for size hints.
 func preserveUpstreamContentLength(resp *http.Response) error {
+	if responseUsesChunkedEncoding(resp) {
+		return nil
+	}
 	if resp.ContentLength >= 0 {
-		resp.Header.Del("Transfer-Encoding")
 		return nil
 	}
 	cl := strings.TrimSpace(resp.Header.Get("Content-Length"))
@@ -183,6 +185,15 @@ func preserveUpstreamContentLength(resp *http.Response) error {
 		return nil
 	}
 	resp.ContentLength = n
-	resp.Header.Del("Transfer-Encoding")
 	return nil
+}
+
+func responseUsesChunkedEncoding(resp *http.Response) bool {
+	te := strings.ToLower(resp.Header.Get("Transfer-Encoding"))
+	for _, part := range strings.Split(te, ",") {
+		if strings.TrimSpace(part) == "chunked" {
+			return true
+		}
+	}
+	return false
 }

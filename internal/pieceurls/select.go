@@ -18,10 +18,9 @@ import (
 
 // Selection is the winning source for one piece after probing candidate HTTP bases.
 type Selection struct {
-	Base      *url.URL
-	CID       string
-	Free      bool
-	SavedPath string
+	Base *url.URL
+	CID  string
+	Free bool
 
 	DealUUID   string
 	PriceUSDFC string

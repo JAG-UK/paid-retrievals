@@ -89,6 +89,37 @@ func TestLineProgressDownloadFailed(t *testing.T) {
 	}
 }
 
+func TestLineProgressDownloadIncompleteStopsSpinner(t *testing.T) {
+	var buf bytes.Buffer
+	ui := &lineProgress{out: &buf, dlTotal: -1}
+	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
+	ui.DownloadStart(cid, "http://127.0.0.1/piece", 1024)
+	time.Sleep(80 * time.Millisecond)
+	ui.DownloadHeaders(cid, 1024)
+	ui.DownloadProgress(cid, 10, 1024)
+	time.Sleep(80 * time.Millisecond)
+	ui.DownloadIncomplete(cid, 10, 1024)
+	time.Sleep(150 * time.Millisecond)
+
+	out := buf.String()
+	if !strings.Contains(out, "\033[2K") {
+		t.Fatal("expected spinner line clear")
+	}
+	if !strings.Contains(out, "WARNING") || !strings.Contains(out, "short read") || !strings.Contains(out, "skipping file") {
+		t.Fatalf("missing warning line:\n%s", out)
+	}
+	warnIdx := strings.LastIndex(out, "WARNING")
+	if warnIdx < 0 {
+		t.Fatal("warning index")
+	}
+	tail := out[warnIdx:]
+	for _, frame := range spinnerFrames {
+		if strings.Contains(tail, frame) {
+			t.Fatalf("spinner still drawing after incomplete warning:\n%s", tail)
+		}
+	}
+}
+
 func TestLineProgressDownloadSpinner(t *testing.T) {
 	var buf bytes.Buffer
 	ui := &lineProgress{out: &buf, dlTotal: -1}

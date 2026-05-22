@@ -14,7 +14,7 @@ import (
 	"github.com/fidlabs/paid-retrievals/internal/pieceurls"
 )
 
-func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, authorization, outDir string, expectedTotal int64, ui ProgressUI, payDebug bool) (string, error) {
+func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, authorization, outDir string, expectedTotal int64, ui ProgressUI, payDebug bool) error {
 	u := *base
 	u.Path = piecePath
 	fullURL := u.String()
@@ -27,7 +27,7 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, authorization,
 	}
 	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if authorization != "" {
 		req.Header.Set("Authorization", authorization)
@@ -40,7 +40,7 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, authorization,
 		if ui.Enabled() {
 			ui.DownloadFailed(cid)
 		}
-		return "", err
+		return err
 	}
 	defer res.Body.Close()
 	if payDebug {
@@ -65,12 +65,12 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, authorization,
 				msg += ": " + pd.Detail
 			}
 			msg += fmt.Sprintf(" (type=%s)", pd.Type)
-			return "", errors.New(msg)
+			return errors.New(msg)
 		}
 		if ui.Enabled() {
 			ui.DownloadFailed(cid)
 		}
-		return "", fmt.Errorf("download %s failed: %s %s", cid, res.Status, trimmed)
+		return fmt.Errorf("download %s failed: %s %s", cid, res.Status, trimmed)
 	}
 
 	outPath := filepath.Join(outDir, sanitizeFilename(cid)+".car")
@@ -87,38 +87,60 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, authorization,
 		if ui.Enabled() {
 			ui.DownloadFailed(cid)
 		}
-		return "", err
+		return err
 	}
 	written, copyErr := copyWithProgress(f, res.Body, cid, total, ui)
 	closeErr := f.Close()
+	if copyErr == nil && getShortOfExpectedSize(written, expectedTotal) {
+		_ = os.Remove(partialPath)
+		if ui.Enabled() {
+			ui.DownloadIncomplete(cid, written, expectedTotal)
+		} else {
+			warnGETShortOfExpected(cid, written, expectedTotal)
+		}
+		return nil
+	}
 	if copyErr != nil {
 		_ = os.Remove(partialPath)
 		if ui.Enabled() {
 			ui.DownloadFailed(cid)
 		}
-		return "", fmt.Errorf("download %s: %w (%s written)", cid, copyErr, formatBytes(written))
+		return fmt.Errorf("download %s: %w (%s written)", cid, copyErr, formatBytes(written))
 	}
 	if closeErr != nil {
 		_ = os.Remove(partialPath)
 		if ui.Enabled() {
 			ui.DownloadFailed(cid)
 		}
-		return "", closeErr
+		return closeErr
 	}
 	if err := os.Rename(partialPath, outPath); err != nil {
 		_ = os.Remove(partialPath)
 		if ui.Enabled() {
 			ui.DownloadFailed(cid)
 		}
-		return "", err
+		return err
 	}
 	if ui.Enabled() {
 		ui.DownloadDone(cid, outPath)
 	}
-	return outPath, nil
+	return nil
 }
 
-func downloadFreeCAR(cli *http.Client, base *url.URL, cid, client0x, outDir string, expectedTotal int64, ui ProgressUI, payDebug bool) (string, error) {
+// getShortOfExpectedSize reports whether the GET body ended before probe HEAD size.
+func getShortOfExpectedSize(getWritten, probeHEADBytes int64) bool {
+	return probeHEADBytes >= 0 && getWritten < probeHEADBytes
+}
+
+// warnGETShortOfExpected logs when progress UI is disabled (non-terminal stderr).
+func warnGETShortOfExpected(cid string, getWritten, probeHEADBytes int64) {
+	fmt.Fprintf(os.Stderr,
+		"warning: GET %s short read (%s written, %s from probe HEAD); skipping file\n",
+		shortCID(cid), formatBytes(getWritten), formatBytes(probeHEADBytes),
+	)
+}
+
+func downloadFreeCAR(cli *http.Client, base *url.URL, cid, client0x, outDir string, expectedTotal int64, ui ProgressUI, payDebug bool) error {
 	u := *base
 	piecePath := "/piece/" + cid
 	u.Path = piecePath

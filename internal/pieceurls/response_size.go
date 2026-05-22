@@ -7,7 +7,7 @@ import (
 )
 
 // ResponseTotalBytes returns the response body size when known, or -1.
-// res.ContentLength is often -1 for chunked transfers even when Content-Length was sent.
+// Chunked GET responses usually have ContentLength -1; use probe HEAD or count bytes while reading.
 func ResponseTotalBytes(res *http.Response) int64 {
 	if res.ContentLength >= 0 {
 		return res.ContentLength

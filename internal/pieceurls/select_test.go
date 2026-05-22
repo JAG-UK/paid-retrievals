@@ -124,9 +124,6 @@ func TestSelectBestPieceSource_FreeBeatsPaid(t *testing.T) {
 	if sel.TotalBytes != int64(len(body)) {
 		t.Fatalf("TotalBytes=%d want %d", sel.TotalBytes, len(body))
 	}
-	if sel.SavedPath != "" {
-		t.Fatalf("probe must not download CAR, got SavedPath=%q", sel.SavedPath)
-	}
 	if _, err := os.Stat(filepath.Join(dir, sanitizeFilename(cid)+".car")); !os.IsNotExist(err) {
 		t.Fatalf("probe must not create CAR on disk: %v", err)
 	}

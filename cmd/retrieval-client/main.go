@@ -44,7 +44,6 @@ type challengeItem struct {
 	CID        string
 	Base       *url.URL
 	Free       bool
-	SavedPath  string
 	TotalBytes int64 // from probe HEAD; -1 when unknown
 	DealUUID   string
 	PriceUSDFC string
@@ -252,7 +251,6 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 					CID:        cid,
 					Base:       sel.Base,
 					Free:       sel.Free,
-					SavedPath:  sel.SavedPath,
 					TotalBytes: sel.TotalBytes,
 					DealUUID:   sel.DealUUID,
 					PriceUSDFC: sel.PriceUSDFC,
@@ -362,25 +360,12 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 					ui.PieceProbe(dlIndex, len(items), it.CID, "downloading")
 				}
 				if it.Free {
-					if strings.TrimSpace(it.SavedPath) != "" {
-						if verbose && !ui.Enabled() {
-							fmt.Printf("  - CID %s already stored (free): %s\n", it.CID, it.SavedPath)
-						} else if !ui.Enabled() {
-							fmt.Printf("stored %s (free)\n", it.SavedPath)
-						}
-						continue
-					}
 					if verbose {
 						fmt.Printf("  - downloading free CAR for CID %s from %s\n", it.CID, it.Base.String())
 					}
-					outPath, err := downloadFreeCAR(cli, it.Base, it.CID, client, outDir, it.TotalBytes, ui, payDebug)
+					err = downloadFreeCAR(cli, it.Base, it.CID, client, outDir, it.TotalBytes, ui, payDebug)
 					if err != nil {
 						return err
-					}
-					if verbose && !ui.Enabled() {
-						fmt.Printf("    piece stored: CID %s -> %s\n", it.CID, outPath)
-					} else if !ui.Enabled() {
-						fmt.Printf("stored %s (free)\n", outPath)
 					}
 					continue
 				}
@@ -417,14 +402,9 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				outPath, err := downloadCAR(cli, it.Base, it.CID, piecePath, authz, outDir, it.TotalBytes, ui, payDebug)
+				err = downloadCAR(cli, it.Base, it.CID, piecePath, authz, outDir, it.TotalBytes, ui, payDebug)
 				if err != nil {
 					return err
-				}
-				if verbose && !ui.Enabled() {
-					fmt.Printf("    piece stored: CID %s -> %s\n", it.CID, outPath)
-				} else if !ui.Enabled() {
-					fmt.Printf("stored %s\n", outPath)
 				}
 			}
 			fmt.Println("Fetch complete.")

@@ -35,6 +35,7 @@ type ProgressUI interface {
 	DownloadHeaders(cid string, totalBytes int64)
 	DownloadProgress(cid string, written, total int64)
 	DownloadFailed(cid string)
+	DownloadIncomplete(cid string, getWritten, probeHEADBytes int64)
 	DownloadDone(cid, path string)
 }
 
@@ -53,6 +54,7 @@ func (noopProgress) DownloadStart(string, string, int64)               {}
 func (noopProgress) DownloadHeaders(string, int64)                     {}
 func (noopProgress) DownloadProgress(string, int64, int64)             {}
 func (noopProgress) DownloadFailed(string)                             {}
+func (noopProgress) DownloadIncomplete(string, int64, int64)           {}
 func (noopProgress) DownloadDone(string, string)                       {}
 
 type lineProgress struct {
@@ -193,9 +195,15 @@ func (p *lineProgress) DownloadFailed(string) {
 	p.stopSpinner()
 }
 
+func (p *lineProgress) DownloadIncomplete(cid string, getWritten, probeHEADBytes int64) {
+	p.stopSpinner()
+	fmt.Fprintf(p.out, "→ WARNING: download %s short read (%s written, %s from probe); skipping file\n",
+		shortCID(cid), formatBytes(getWritten), formatBytes(probeHEADBytes))
+}
+
 func (p *lineProgress) DownloadDone(cid, path string) {
 	p.stopSpinner()
-	fmt.Fprintf(p.out, "→ stored %s (%s)\n", path, shortCID(cid))
+	fmt.Fprintf(p.out, "→ stored %s\n", path)
 }
 
 func (p *lineProgress) startSpinner(kind spinnerKind, init func()) {
@@ -265,12 +273,12 @@ func formatDownloadProgress(cid string, written, total int64, awaitingHTTP bool)
 			line = fmt.Sprintf("%s %s / %s (%.1f%%)", shortCID(cid), formatBytes(written), formatBytes(total), pct)
 		}
 		if awaitingHTTP {
-			line += " — waiting for SP (payment settlement, then CAR stream)"
+			line += " — waiting for SP (payment settlement)"
 		}
 		return line
 	}
 	if awaitingHTTP {
-		return fmt.Sprintf("%s waiting for SP (payment settlement, then CAR stream)", shortCID(cid))
+		return fmt.Sprintf("%s waiting for SP (payment settlement)", shortCID(cid))
 	}
 	return fmt.Sprintf("%s %s received", shortCID(cid), formatBytes(written))
 }
