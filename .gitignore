@@ -25,3 +25,6 @@ vendor/
 *.db
 *.db-shm
 *.db-wal
+
+# Local E2E funded keys (see test/e2e/stack/README.md)
+test/e2e/.keys/

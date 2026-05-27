@@ -217,6 +217,22 @@ func (c *Client) SignerAddress() common.Address { return c.signerAddr }
 
 func (c *Client) PaymentsAddress() common.Address { return c.paymentsAddr }
 
+// PaymentToken returns the USDFC ERC-20 contract address for the connected chain.
+func (c *Client) PaymentToken() common.Address { return c.paymentToken }
+
+// WalletUSDFCBalance returns USDFC held in the owner's EVM wallet (not Filecoin Pay deposits).
+func (c *Client) WalletUSDFCBalance(ctx context.Context, owner common.Address) (*big.Int, error) {
+	usdfc, err := c.erc20()
+	if err != nil {
+		return nil, err
+	}
+	bal, err := usdfc.BalanceOf(ctx, owner)
+	if err != nil {
+		return nil, fmt.Errorf("filpay: USDFC wallet balance: %w", err)
+	}
+	return bal, nil
+}
+
 func (c *Client) ChainID() *big.Int {
 	if c == nil || c.chainID == nil {
 		return nil

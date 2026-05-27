@@ -56,16 +56,46 @@ tasks:
     desc: Run unit tests
     cmds:
       - task test:coverage
+      - task test:e2e
+
+  test:e2e:
+    desc: Black-box CLI end-to-end tests (builds retrieval-client, runs via exec)
+    deps:
+      - bootstrap
+    cmds:
+      - go test -v -count=1 ./test/e2e/retrievalclient/...
+
+  test:e2e:stack:
+    desc: Local stack E2E (docker nginx + sp-proxy + retrieval-client; optional Calibration keys)
+    deps:
+      - bootstrap
+    cmds:
+      - go test -v -tags=e2e_stack -count=1 -timeout=15m ./test/e2e/stack/...
+
+  test:e2e:stack:calibration:
+    desc: Stack E2E paid fetch on Filecoin Calibration (requires funded keys under test/e2e/.keys)
+    deps:
+      - bootstrap
+    env:
+      E2E_CALIBRATION: "1"
+    cmds:
+      - go test -v -tags=e2e_stack -count=1 -timeout=25m -run 'TestStack_Calibration' ./test/e2e/stack/...
 
   test:coverage:
-    desc: Run unit tests and write coverage report
+    desc: Run unit tests and write coverage report (excludes test/e2e; run task test:e2e separately)
     deps:
       - bootstrap
     cmds:
       - |
         set -euo pipefail
         mkdir -p .task
-        if ! go test -coverprofile=coverage.out ./... > .task/coverage-test.log 2>&1; then
+        pkgs="$(go list ./... | grep -v '/test/e2e' || true)"
+        if [[ -z "${pkgs}" ]]; then
+          echo "no packages for coverage" >&2
+          exit 1
+        fi
+        # shellcheck disable=SC2086
+        if ! go test -coverprofile=coverage.out ${pkgs} > .task/coverage-test.log 2>&1; then
           cat .task/coverage-test.log
           exit 1
         fi
@@ -88,11 +118,19 @@ tasks:
       - go build -o bin/ ./cmd/retrieval-client ./cmd/sp-proxy
 
   vuln:
-    desc: Run vulnerability checks
+    desc: Run vulnerability checks (excludes test/e2e helper packages)
     deps:
       - tools
     cmds:
-      - "{{.LOCAL_BIN}}/govulncheck ./..."
+      - |
+        set -euo pipefail
+        pkgs="$(go list ./... | grep -v '/test/e2e' || true)"
+        if [[ -z "${pkgs}" ]]; then
+          echo "no packages for vuln check" >&2
+          exit 1
+        fi
+        # shellcheck disable=SC2086
+        {{.LOCAL_BIN}}/govulncheck ${pkgs}
 
   ci:
     desc: Run local CI checks

@@ -25,7 +25,7 @@ if [[ -n "${test_log}" && -f "${test_log}" ]]; then
 				pct = $(i + 1)
 			}
 		}
-		if (pkg != "" && pct != "") {
+		if (pkg != "" && pct != "" && pkg !~ /^test\/e2e/) {
 			printf "  %-45s %s\n", pkg, pct
 		}
 	}' || true
