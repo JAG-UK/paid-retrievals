@@ -204,15 +204,10 @@ If you want to ignore discovered endpoints and only probe one base URL (eg your 
 - `--expires-in-sec` (MPP proof header expiry)
 - `--pay-debug`, `--verbose`
 
-## Local stack E2E (black-box)
+## E2E shell tasks
 
-With Docker running, exercise nginx → `sp-proxy` → `retrieval-client` together:
-
-```bash
-task test:e2e:stack
-```
-
-See [test/e2e/stack/README.md](test/e2e/stack/README.md) for paid Calibration tests (`task test:e2e:stack:calibration` with funded keys under `test/e2e/.keys/`). CI runs only the lighter `task test:e2e` client tests.
+- `task test:e2e:dicovery`: discovers two working piece URLs from `sp-tool`, extracts CIDs, and runs `retrieval-client fetch` against mainnet RPC.
+- `task test:e2e:filpay`: starts local nginx (`task nginx:piece`), launches `sp-proxy` on `:8787`, and runs a paid fetch on Calibration through the proxy.
 
 ## Validation
 

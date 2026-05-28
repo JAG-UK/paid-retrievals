@@ -56,40 +56,79 @@ tasks:
     desc: Run unit tests
     cmds:
       - task test:coverage
-      - task test:e2e
 
-  test:e2e:
-    desc: Black-box CLI end-to-end tests (builds retrieval-client, runs via exec)
+  test:e2e:discovery:
+    desc: Fetch two discovered CIDs from public provider API
     deps:
-      - bootstrap
+      - build
     cmds:
-      - go test -v -count=1 ./test/e2e/retrievalclient/...
+      - |
+        set -euo pipefail
+        urls="$(curl -fsS 'https://api.sp-tool.allocator.tech/providers?limit=10&has_working_url=true&is_consistent=true&extended=true' | jq -r '.providers[] | select(.is_reliable == true) | .working_url')"
+        cid1="$(printf '%s\n' "${urls}" | sed -n '1p' | sed -E 's#/*$##' | awk -F'/' '{print $NF}')"
+        cid2="$(printf '%s\n' "${urls}" | sed -n '2p' | sed -E 's#/*$##' | awk -F'/' '{print $NF}')"
+        if [[ -z "${cid1}" || -z "${cid2}" ]]; then
+          echo "failed to determine two CIDs from providers API" >&2
+          exit 1
+        fi
+        echo "discovered CIDs: ${cid1}, ${cid2}"
+        ./bin/retrieval-client fetch \
+          --filpay-private-key-file ./client.key \
+          --pay-rpc-url "https://api.node.glif.io/rpc/v1" \
+          --yes \
+          --cid "${cid1}" \
+          --cid "${cid2}"
 
-  test:e2e:stack:
-    desc: Local stack E2E (docker nginx + sp-proxy + retrieval-client; optional Calibration keys)
+  test:e2e:filpay:
+    desc: Local nginx + sp-proxy paid fetch through Filecoin Pay on Calibration network
     deps:
-      - bootstrap
+      - build
+      - nginx:piece
     cmds:
-      - go test -v -tags=e2e_stack -count=1 -timeout=15m ./test/e2e/stack/...
-
-  test:e2e:stack:calibration:
-    desc: Stack E2E paid fetch on Filecoin Calibration (requires funded keys under test/e2e/.keys)
-    deps:
-      - bootstrap
-    env:
-      E2E_CALIBRATION: "1"
-    cmds:
-      - go test -v -tags=e2e_stack -count=1 -timeout=25m -run 'TestStack_Calibration' ./test/e2e/stack/...
+      - |
+        set -euo pipefail
+        mkdir -p .task
+        rm -f .task/sp-proxy-test.log .task/sp-proxy-test.pid
+        ./bin/sp-proxy \
+          --listen ":8787" \
+          --db ".task/sp-proxy-test.db" \
+          --pay-private-key-file ./sp.key \
+          --pay-rpc-url "https://api.calibration.node.glif.io/rpc/v1" \
+          --upstream-host "127.0.0.1" \
+          --upstream-port 8788 \
+          > .task/sp-proxy-test.log 2>&1 &
+        proxy_pid=$!
+        echo "${proxy_pid}" > .task/sp-proxy-test.pid
+        cleanup() {
+          if kill -0 "${proxy_pid}" >/dev/null 2>&1; then
+            kill "${proxy_pid}" >/dev/null 2>&1 || true
+            wait "${proxy_pid}" >/dev/null 2>&1 || true
+          fi
+          rm -f .task/sp-proxy-test.pid
+        }
+        trap cleanup EXIT
+        for _ in {1..20}; do
+          if curl -fsS --head "http://127.0.0.1:8787/piece/baga6ea4seaqchqdzwxltukzwbtajfugthjhikv2ezg46qjvsevzbe7nghsxtmbj" >/dev/null 2>&1; then
+            break
+          fi
+          sleep 1
+        done
+        ./bin/retrieval-client fetch \
+          --filpay-private-key-file ./client.key \
+          --pay-rpc-url "https://api.calibration.node.glif.io/rpc/v1" \
+          --sp-base-url "http://127.0.0.1:8787" \
+          --yes \
+          --cid baga6ea4seaqchqdzwxltukzwbtajfugthjhikv2ezg46qjvsevzbe7nghsxtmbj
 
   test:coverage:
-    desc: Run unit tests and write coverage report (excludes test/e2e; run task test:e2e separately)
+    desc: Run unit tests and write coverage report
     deps:
       - bootstrap
     cmds:
       - |
         set -euo pipefail
         mkdir -p .task
-        pkgs="$(go list ./... | grep -v '/test/e2e' || true)"
+        pkgs="$(go list ./...)"
         if [[ -z "${pkgs}" ]]; then
           echo "no packages for coverage" >&2
           exit 1
@@ -118,13 +157,13 @@ tasks:
       - go build -o bin/ ./cmd/retrieval-client ./cmd/sp-proxy
 
   vuln:
-    desc: Run vulnerability checks (excludes test/e2e helper packages)
+    desc: Run vulnerability checks
     deps:
       - tools
     cmds:
       - |
         set -euo pipefail
-        pkgs="$(go list ./... | grep -v '/test/e2e' || true)"
+        pkgs="$(go list ./...)"
         if [[ -z "${pkgs}" ]]; then
           echo "no packages for vuln check" >&2
           exit 1
