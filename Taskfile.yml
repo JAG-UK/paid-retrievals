@@ -113,6 +113,7 @@ tasks:
           fi
           sleep 1
         done
+        curl -fsS --head "http://127.0.0.1:8787/piece/baga6ea4seaqchqdzwxltukzwbtajfugthjhikv2ezg46qjvsevzbe7nghsxtmbj" >/dev/null 2>&1
         ./bin/retrieval-client fetch \
           --filpay-private-key-file ./client.key \
           --pay-rpc-url "https://api.calibration.node.glif.io/rpc/v1" \
