@@ -204,6 +204,11 @@ If you want to ignore discovered endpoints and only probe one base URL (eg your 
 - `--expires-in-sec` (MPP proof header expiry)
 - `--pay-debug`, `--verbose`
 
+## E2E shell tasks
+
+- `task test:e2e:dicovery`: discovers two working piece URLs from `sp-tool`, extracts CIDs, and runs `retrieval-client fetch` against mainnet RPC.
+- `task test:e2e:filpay`: starts local nginx (`task nginx:piece`), launches `sp-proxy` on `:8787`, and runs a paid fetch on Calibration through the proxy.
+
 ## Validation
 
 To verify that the system is working, check the logs for the client and / or storage provider proxy and identify the rail ID.

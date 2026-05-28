@@ -57,6 +57,70 @@ tasks:
     cmds:
       - task test:coverage
 
+  test:e2e:discovery:
+    desc: Fetch two discovered CIDs from public provider API
+    deps:
+      - build
+    cmds:
+      - |
+        set -euo pipefail
+        urls="$(curl -fsS 'https://api.sp-tool.allocator.tech/providers?limit=10&has_working_url=true&is_consistent=true&extended=true' | jq -r '.providers[] | select(.is_reliable == true) | .working_url')"
+        cid1="$(printf '%s\n' "${urls}" | sed -n '1p' | sed -E 's#/*$##' | awk -F'/' '{print $NF}')"
+        cid2="$(printf '%s\n' "${urls}" | sed -n '2p' | sed -E 's#/*$##' | awk -F'/' '{print $NF}')"
+        if [[ -z "${cid1}" || -z "${cid2}" ]]; then
+          echo "failed to determine two CIDs from providers API" >&2
+          exit 1
+        fi
+        echo "discovered CIDs: ${cid1}, ${cid2}"
+        ./bin/retrieval-client fetch \
+          --filpay-private-key-file ./client.key \
+          --pay-rpc-url "https://api.node.glif.io/rpc/v1" \
+          --yes \
+          --cid "${cid1}" \
+          --cid "${cid2}"
+
+  test:e2e:filpay:
+    desc: Local nginx + sp-proxy paid fetch through Filecoin Pay on Calibration network
+    deps:
+      - build
+      - nginx:piece
+    cmds:
+      - |
+        set -euo pipefail
+        mkdir -p .task
+        rm -f .task/sp-proxy-test.log .task/sp-proxy-test.pid
+        ./bin/sp-proxy \
+          --listen ":8787" \
+          --db ".task/sp-proxy-test.db" \
+          --pay-private-key-file ./sp.key \
+          --pay-rpc-url "https://api.calibration.node.glif.io/rpc/v1" \
+          --upstream-host "127.0.0.1" \
+          --upstream-port 8788 \
+          > .task/sp-proxy-test.log 2>&1 &
+        proxy_pid=$!
+        echo "${proxy_pid}" > .task/sp-proxy-test.pid
+        cleanup() {
+          if kill -0 "${proxy_pid}" >/dev/null 2>&1; then
+            kill "${proxy_pid}" >/dev/null 2>&1 || true
+            wait "${proxy_pid}" >/dev/null 2>&1 || true
+          fi
+          rm -f .task/sp-proxy-test.pid
+        }
+        trap cleanup EXIT
+        for _ in {1..20}; do
+          if curl -fsS --head "http://127.0.0.1:8787/piece/baga6ea4seaqchqdzwxltukzwbtajfugthjhikv2ezg46qjvsevzbe7nghsxtmbj" >/dev/null 2>&1; then
+            break
+          fi
+          sleep 1
+        done
+        curl -fsS --head "http://127.0.0.1:8787/piece/baga6ea4seaqchqdzwxltukzwbtajfugthjhikv2ezg46qjvsevzbe7nghsxtmbj" >/dev/null 2>&1
+        ./bin/retrieval-client fetch \
+          --filpay-private-key-file ./client.key \
+          --pay-rpc-url "https://api.calibration.node.glif.io/rpc/v1" \
+          --sp-base-url "http://127.0.0.1:8787" \
+          --yes \
+          --cid baga6ea4seaqchqdzwxltukzwbtajfugthjhikv2ezg46qjvsevzbe7nghsxtmbj
+
   test:coverage:
     desc: Run unit tests and write coverage report
     deps:
@@ -124,7 +188,7 @@ tasks:
       - rm -rf bin "{{.LOCAL_ROOT}}"
 
   nginx:piece:
-    desc: Start stock nginx serving an 8 GiB sparse dummy file under /piece/<cid>
+    desc: Start stock nginx serving an 32 GiB sparse dummy file under /piece/<cid>
     cmds:
       - mkdir -p .task/nginx-piece/piece
       - truncate -s 32G .task/nginx-piece/piece/data.car
