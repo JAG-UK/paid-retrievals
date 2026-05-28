@@ -128,13 +128,7 @@ tasks:
       - |
         set -euo pipefail
         mkdir -p .task
-        pkgs="$(go list ./...)"
-        if [[ -z "${pkgs}" ]]; then
-          echo "no packages for coverage" >&2
-          exit 1
-        fi
-        # shellcheck disable=SC2086
-        if ! go test -coverprofile=coverage.out ${pkgs} > .task/coverage-test.log 2>&1; then
+        if ! go test -coverprofile=coverage.out ./... > .task/coverage-test.log 2>&1; then
           cat .task/coverage-test.log
           exit 1
         fi
@@ -161,15 +155,7 @@ tasks:
     deps:
       - tools
     cmds:
-      - |
-        set -euo pipefail
-        pkgs="$(go list ./...)"
-        if [[ -z "${pkgs}" ]]; then
-          echo "no packages for vuln check" >&2
-          exit 1
-        fi
-        # shellcheck disable=SC2086
-        {{.LOCAL_BIN}}/govulncheck ${pkgs}
+      - "{{.LOCAL_BIN}}/govulncheck ./..."
 
   ci:
     desc: Run local CI checks
