@@ -188,7 +188,7 @@ tasks:
       - rm -rf bin "{{.LOCAL_ROOT}}"
 
   nginx:piece:
-    desc: Start stock nginx serving an 8 GiB sparse dummy file under /piece/<cid>
+    desc: Start stock nginx serving an 32 GiB sparse dummy file under /piece/<cid>
     cmds:
       - mkdir -p .task/nginx-piece/piece
       - truncate -s 32G .task/nginx-piece/piece/data.car
