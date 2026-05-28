@@ -217,9 +217,6 @@ func (c *Client) SignerAddress() common.Address { return c.signerAddr }
 
 func (c *Client) PaymentsAddress() common.Address { return c.paymentsAddr }
 
-// PaymentToken returns the USDFC ERC-20 contract address for the connected chain.
-func (c *Client) PaymentToken() common.Address { return c.paymentToken }
-
 func (c *Client) ChainID() *big.Int {
 	if c == nil || c.chainID == nil {
 		return nil
