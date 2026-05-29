@@ -10,15 +10,34 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fidlabs/paid-retrievals/internal/pieceurls"
 )
 
-func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, authorization, outDir string, expectedTotal int64, ui ProgressUI, payDebug bool) error {
+var (
+	downloadMaxAttempts = 100
+	downloadRetryDelay  = 500 * time.Millisecond
+)
+
+type retryableDownloadError struct {
+	err         error
+	writtenByte int64
+}
+
+func (e *retryableDownloadError) Error() string { return e.err.Error() }
+func (e *retryableDownloadError) Unwrap() error { return e.err }
+
+func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, client0x, authorization, outDir string, expectedTotal int64, ui ProgressUI, verbose bool) error {
 	u := *base
 	u.Path = piecePath
+	if strings.TrimSpace(client0x) != "" {
+		q := u.Query()
+		q.Set("client", client0x)
+		u.RawQuery = q.Encode()
+	}
 	fullURL := u.String()
-	if payDebug {
+	if verbose {
 		if authorization != "" {
 			payClientLog("paid GET %s (Authorization: Payment len=%d)", fullURL, len(authorization))
 		} else {
@@ -32,31 +51,79 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, authorization,
 	if authorization != "" {
 		req.Header.Set("Authorization", authorization)
 	}
+	outPath := filepath.Join(outDir, sanitizeFilename(cid)+".car")
+	partialPath := outPath + ".partial"
+	paid := authorization != ""
+	var resumeFrom int64
+	var lastErr error
 	if ui.Enabled() {
-		ui.DownloadStart(cid, fullURL, expectedTotal)
+		ui.DownloadStart(cid, fullURL, expectedTotal, paid, 0)
 	}
+	for attempt := 1; attempt <= downloadMaxAttempts; attempt++ {
+		if ui.Enabled() {
+			if attempt > 1 {
+				ui.DownloadAttempt(expectedTotal, attempt-1)
+			}
+		} else if attempt > 1 && lastErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: retrying GET %s (%d/%d): %v\n", shortCID(cid), attempt, downloadMaxAttempts, lastErr)
+		}
+		attemptReq := req.Clone(req.Context())
+		// Be explicit per attempt in case intermediaries/request cloning behavior changes.
+		if authorization != "" {
+			attemptReq.Header.Set("Authorization", authorization)
+		}
+		if resumeFrom > 0 {
+			attemptReq.Header.Set("Range", fmt.Sprintf("bytes=%d-", resumeFrom))
+			if verbose {
+				payClientLog("GET %s retry with Range: bytes=%d-", shortCID(cid), resumeFrom)
+			}
+		}
+		lastErr = downloadCAROnce(cli, attemptReq, cid, outDir, expectedTotal, resumeFrom, ui, verbose)
+		if lastErr == nil {
+			return nil
+		}
+		if retryable, ok := errors.AsType[*retryableDownloadError](lastErr); ok {
+			resumeFrom = retryable.writtenByte
+		}
+		if !isRetryableDownloadError(lastErr) || attempt == downloadMaxAttempts {
+			break
+		}
+		time.Sleep(downloadRetryDelay * time.Duration(attempt))
+	}
+	if ui.Enabled() {
+		ui.DownloadFailed(cid)
+	}
+	_ = os.Remove(partialPath)
+	return lastErr
+}
+
+func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, expectedTotal, resumeFrom int64, ui ProgressUI, verbose bool) error {
 	res, err := cli.Do(req)
 	if err != nil {
-		if ui.Enabled() {
-			ui.DownloadFailed(cid)
-		}
-		return err
+		return &retryableDownloadError{err: err, writtenByte: resumeFrom}
 	}
 	defer res.Body.Close()
-	if payDebug {
-		payClientLog("paid GET response status=%d for cid=%s", res.StatusCode, cid)
+	if verbose {
+		payClientLog("GET response status=%d for cid=%s", res.StatusCode, cid)
 	}
-	if res.StatusCode != http.StatusOK {
+	if resumeFrom > 0 && res.StatusCode != http.StatusPartialContent && res.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-		if payDebug {
-			payClientLog("paid GET error body (truncated): %s", truncateForLog(string(b), 512))
+		if verbose {
+			payClientLog("GET error body (truncated): %s", truncateForLog(string(b), 512))
+		}
+		if res.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+			return fmt.Errorf("download %s failed: %s (range resume from %s)", cid, res.Status, formatBytes(resumeFrom))
+		}
+		return fmt.Errorf("download %s failed: %s %s", cid, res.Status, strings.TrimSpace(string(b)))
+	}
+	if resumeFrom == 0 && res.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+		if verbose {
+			payClientLog("GET error body (truncated): %s", truncateForLog(string(b), 512))
 		}
 		trimmed := strings.TrimSpace(string(b))
 		var pd problemDetails
 		if err := json.Unmarshal(b, &pd); err == nil && pd.Type != "" {
-			if ui.Enabled() {
-				ui.DownloadFailed(cid)
-			}
 			msg := fmt.Sprintf("download %s failed: %s", cid, res.Status)
 			if pd.Title != "" {
 				msg += " - " + pd.Title
@@ -67,9 +134,6 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, authorization,
 			msg += fmt.Sprintf(" (type=%s)", pd.Type)
 			return errors.New(msg)
 		}
-		if ui.Enabled() {
-			ui.DownloadFailed(cid)
-		}
 		return fmt.Errorf("download %s failed: %s %s", cid, res.Status, trimmed)
 	}
 
@@ -77,48 +141,59 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, authorization,
 	partialPath := outPath + ".partial"
 	total := expectedTotal
 	if respTotal := pieceurls.ResponseTotalBytes(res); respTotal >= 0 {
-		total = respTotal
+		if resumeFrom > 0 && res.StatusCode == http.StatusPartialContent {
+			total = resumeFrom + respTotal
+		} else {
+			total = respTotal
+		}
 	}
 	if ui.Enabled() {
 		ui.DownloadHeaders(cid, total)
-	}
-	f, err := os.Create(partialPath)
-	if err != nil {
-		if ui.Enabled() {
-			ui.DownloadFailed(cid)
+		if resumeFrom > 0 {
+			ui.DownloadProgress(cid, resumeFrom, total)
 		}
+	}
+
+	openFlags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if resumeFrom > 0 && res.StatusCode == http.StatusPartialContent {
+		if verbose {
+			payClientLog("GET %s resumed at %s (206 Partial Content)", shortCID(cid), formatBytes(resumeFrom))
+		}
+		openFlags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	} else if resumeFrom > 0 && res.StatusCode == http.StatusOK {
+		// Upstream ignored Range; restart from scratch on this attempt.
+		if verbose {
+			payClientLog("GET %s ignored Range; restarting from 0 (200 OK)", shortCID(cid))
+		}
+		resumeFrom = 0
+	}
+	f, err := os.OpenFile(partialPath, openFlags, 0o644)
+	if err != nil {
 		return err
 	}
-	written, copyErr := copyWithProgress(f, res.Body, cid, total, ui)
+	written, copyErr := copyWithProgress(f, res.Body, cid, total, resumeFrom, ui)
 	closeErr := f.Close()
-	if copyErr == nil && getShortOfExpectedSize(written, expectedTotal) {
-		_ = os.Remove(partialPath)
-		if ui.Enabled() {
-			ui.DownloadIncomplete(cid, written, expectedTotal)
-		} else {
-			warnGETShortOfExpected(cid, written, expectedTotal)
-		}
-		return nil
-	}
 	if copyErr != nil {
-		_ = os.Remove(partialPath)
-		if ui.Enabled() {
-			ui.DownloadFailed(cid)
+		return &retryableDownloadError{
+			err:         fmt.Errorf("download %s: %w (%s written)", cid, copyErr, formatBytes(written)),
+			writtenByte: written,
 		}
-		return fmt.Errorf("download %s: %w (%s written)", cid, copyErr, formatBytes(written))
 	}
 	if closeErr != nil {
 		_ = os.Remove(partialPath)
-		if ui.Enabled() {
-			ui.DownloadFailed(cid)
-		}
 		return closeErr
+	}
+	if getShortOfExpectedSize(written, total) {
+		if !ui.Enabled() {
+			warnGETShortOfExpected(cid, written, total)
+		}
+		return &retryableDownloadError{
+			err:         fmt.Errorf("download %s incomplete: %s written, expected %s", cid, formatBytes(written), formatBytes(total)),
+			writtenByte: written,
+		}
 	}
 	if err := os.Rename(partialPath, outPath); err != nil {
 		_ = os.Remove(partialPath)
-		if ui.Enabled() {
-			ui.DownloadFailed(cid)
-		}
 		return err
 	}
 	if ui.Enabled() {
@@ -135,24 +210,33 @@ func getShortOfExpectedSize(getWritten, probeHEADBytes int64) bool {
 // warnGETShortOfExpected logs when progress UI is disabled (non-terminal stderr).
 func warnGETShortOfExpected(cid string, getWritten, probeHEADBytes int64) {
 	fmt.Fprintf(os.Stderr,
-		"warning: GET %s short read (%s written, %s from probe HEAD); skipping file\n",
+		"warning: GET %s short read (%s written, %s from probe HEAD); retrying file\n",
 		shortCID(cid), formatBytes(getWritten), formatBytes(probeHEADBytes),
 	)
 }
 
-func downloadFreeCAR(cli *http.Client, base *url.URL, cid, client0x, outDir string, expectedTotal int64, ui ProgressUI, payDebug bool) error {
+func isRetryableDownloadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var retryable *retryableDownloadError
+	return errors.As(err, &retryable)
+}
+
+func downloadFreeCAR(cli *http.Client, base *url.URL, cid, outDir string, expectedTotal int64, ui ProgressUI, verbose bool) error {
 	u := *base
 	piecePath := "/piece/" + cid
 	u.Path = piecePath
-	return downloadCAR(cli, &u, cid, piecePath, "", outDir, expectedTotal, ui, payDebug)
+	return downloadCAR(cli, &u, cid, piecePath, "", "", outDir, expectedTotal, ui, verbose)
 }
 
-func copyWithProgress(dst io.Writer, src io.Reader, cid string, total int64, ui ProgressUI) (int64, error) {
+func copyWithProgress(dst io.Writer, src io.Reader, cid string, total, initialWritten int64, ui ProgressUI) (int64, error) {
 	if !ui.Enabled() {
-		return io.Copy(dst, src)
+		n, err := io.Copy(dst, src)
+		return initialWritten + n, err
 	}
 	buf := make([]byte, 32*1024)
-	var written int64
+	written := initialWritten
 	for {
 		n, rerr := src.Read(buf)
 		if n > 0 {

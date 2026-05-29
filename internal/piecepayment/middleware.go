@@ -48,6 +48,14 @@ func (svc *RetrievalService) PiecePaymentMiddleware(MaxHeaderSize int) func(http
 			}
 
 			rawHdr := strings.TrimSpace(r.Header.Get("Authorization"))
+			if svc.cfg.PayDebug {
+				logger.Info("piece request auth",
+					"method", r.Method,
+					"path", r.URL.Path,
+					"auth_present", rawHdr != "",
+					"auth_len", len(rawHdr),
+				)
+			}
 			if rawHdr == "" {
 				// If there is no authorization header, we need to check if the upstream exists before issuing a payment challenge
 				exists, status := upstreamExists(next, r)
@@ -58,9 +66,8 @@ func (svc *RetrievalService) PiecePaymentMiddleware(MaxHeaderSize int) func(http
 				}
 				outcome, err := svc.IssueQuote(r, cid)
 				if err != nil {
-					var badReq *BadRequestError
-					if errors.As(err, &badReq) {
-						http.Error(w, badReq.Message, http.StatusBadRequest)
+					if badReq, ok := errors.AsType[*BadRequestError](err); ok {
+						failPaymentRequired(w, r, nil, logger, "payment-required", badReq.Message)
 						return
 					}
 					http.Error(w, "internal error", http.StatusInternalServerError)
@@ -128,6 +135,7 @@ func (w *receiptResponseWriter) WriteHeader(statusCode int) {
 		return
 	}
 	w.wroteHeader = true
+	w.logger.Debug("writing payment receipt", "deal_uuid", w.dealUUID, "tx_hash", w.txHash)
 
 	if statusCode >= http.StatusOK && statusCode < http.StatusMultipleChoices {
 		if err := mpp.WritePaymentReceipt(w.w.Header(), mpp.MethodID, w.txHash, time.Now()); err != nil {

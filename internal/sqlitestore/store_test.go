@@ -105,17 +105,70 @@ func TestMarkPaid(t *testing.T) {
 	dealUUID := "11111111-2222-3333-4444-555555555555"
 	seedDeal(t, s, dealUUID, "0xClient", "bafy", "0.01", "")
 
-	if err := s.MarkPaid(ctx, dealUUID); err != nil {
+	if err := s.MarkPaid(ctx, dealUUID, "0xtx-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkPaid(ctx, dealUUID); err != nil {
+	got, err := s.GetDeal(ctx, dealUUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastPaidTxHash != "0xtx-1" {
+		t.Fatalf("tx hash mismatch: %q", got.LastPaidTxHash)
+	}
+	if err := s.MarkPaid(ctx, dealUUID, "0xtx-2"); err != nil {
 		t.Fatal("second mark paid should succeed")
+	}
+	got, err = s.GetDeal(ctx, dealUUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastPaidTxHash != "0xtx-2" {
+		t.Fatalf("tx hash mismatch after second mark: %q", got.LastPaidTxHash)
+	}
+}
+
+func TestIsDealPaidSinceRequiresDealClientAndCIDMatch(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	const (
+		dealUUID = "11111111-2222-3333-4444-555555555555"
+		client   = "0x1111111111111111111111111111111111111111"
+		cid      = "bafkreic3gqso3booyry4fwc5wfnhaio574lami3am6nv4k6q6u2legzzdm"
+	)
+	seedDeal(t, s, dealUUID, client, cid, "0.01", "")
+	if err := s.MarkPaid(ctx, dealUUID, "0xtx-abc"); err != nil {
+		t.Fatal(err)
+	}
+	since := time.Now().Add(-time.Minute).Unix()
+
+	paid, err := s.IsDealPaidSince(ctx, dealUUID, client, cid, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !paid {
+		t.Fatal("expected paid=true for exact deal/client/cid")
+	}
+
+	paid, err = s.IsDealPaidSince(ctx, dealUUID, client, "bafydifferentcid", since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paid {
+		t.Fatal("expected paid=false for mismatched cid")
+	}
+
+	paid, err = s.IsDealPaidSince(ctx, dealUUID, "0x2222222222222222222222222222222222222222", cid, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paid {
+		t.Fatal("expected paid=false for mismatched client")
 	}
 }
 
 func TestMarkPaidNotFound(t *testing.T) {
 	s := openTestStore(t)
-	err := s.MarkPaid(context.Background(), "00000000-0000-0000-0000-000000000000")
+	err := s.MarkPaid(context.Background(), "00000000-0000-0000-0000-000000000000", "0xtx-missing")
 	if !errors.Is(err, pp.ErrDealNotFound) {
 		t.Fatalf("got %v", err)
 	}

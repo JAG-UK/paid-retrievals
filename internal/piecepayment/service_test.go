@@ -19,11 +19,13 @@ import (
 const testPieceCID = "bafkreidde4sfyosf2pm6u4vxb65wogjg464a6y6tcg75opo6q5wv34bley"
 
 type mockDealStore struct {
-	deals       map[string]*Deal
-	insertErr   error
-	getErr      error
-	consumeErr  error
-	markPaidErr error
+	deals          map[string]*Deal
+	lastPaidAt     map[string]int64
+	lastPaidTxHash map[string]string
+	insertErr      error
+	getErr         error
+	consumeErr     error
+	markPaidErr    error
 }
 
 func (m *mockDealStore) InsertQuote(_ context.Context, dealUUID, client, cid, priceUSDFC, payee0x string) error {
@@ -65,8 +67,49 @@ func (m *mockDealStore) ConsumeNonce(_ context.Context, dealUUID, nonce string, 
 	return nil
 }
 
-func (m *mockDealStore) MarkPaid(_ context.Context, _ string) error {
+func (m *mockDealStore) MarkPaid(_ context.Context, dealUUID, txHash string) error {
+	if m.markPaidErr == nil {
+		if m.lastPaidAt == nil {
+			m.lastPaidAt = map[string]int64{}
+		}
+		if m.lastPaidTxHash == nil {
+			m.lastPaidTxHash = map[string]string{}
+		}
+		m.lastPaidAt[dealUUID] = time.Now().Unix()
+		m.lastPaidTxHash[dealUUID] = txHash
+		if d, ok := m.deals[dealUUID]; ok {
+			d.LastPaidTxHash = txHash
+		}
+	}
 	return m.markPaidErr
+}
+
+func (m *mockDealStore) FindPaidDeal(_ context.Context, client, cid string, sinceUnix int64) (*Deal, error) {
+	for dealUUID, d := range m.deals {
+		if strings.Contains(dealUUID, ":") { // skip nonce sentinel keys
+			continue
+		}
+		if d.Client == client && d.CID == cid {
+			if m.lastPaidAt != nil && m.lastPaidAt[dealUUID] >= sinceUnix {
+				return d, nil
+			}
+		}
+	}
+	return nil, ErrDealNotFound
+}
+
+func (m *mockDealStore) IsDealPaidSince(_ context.Context, dealUUID, client, cid string, sinceUnix int64) (bool, error) {
+	if m.lastPaidAt == nil {
+		return false, nil
+	}
+	d, ok := m.deals[dealUUID]
+	if !ok {
+		return false, nil
+	}
+	if d.Client != client || d.CID != cid {
+		return false, nil
+	}
+	return m.lastPaidAt[dealUUID] >= sinceUnix, nil
 }
 
 type stubSettler struct {
@@ -368,13 +411,16 @@ func TestAuthorizeAndSettleErrors(t *testing.T) {
 		svc3, pk3, client3 := testService(t, &mockDealStore{}, stubSettler{})
 		q3, _ := svc3.IssueQuote(issueQuoteRequest(t, host, testPieceCID, client3), testPieceCID)
 		raw := buildProof(t, pk3, q3.Challenge, client3, testPieceCID, host, "replay-n", time.Now().Add(time.Minute).Unix())
-		if _, err := svc3.AuthorizeAndSettle(paidRequest(t, host, testPieceCID, raw), testPieceCID, raw); err != nil {
+		first, err := svc3.AuthorizeAndSettle(paidRequest(t, host, testPieceCID, raw), testPieceCID, raw)
+		if err != nil {
 			t.Fatal(err)
 		}
-		_, err := svc3.AuthorizeAndSettle(paidRequest(t, host, testPieceCID, raw), testPieceCID, raw)
-		var pe *PaymentRequiredError
-		if !errors.As(err, &pe) || pe.Code != "invalid-challenge" {
-			t.Fatalf("got %v", err)
+		replay, err := svc3.AuthorizeAndSettle(paidRequest(t, host, testPieceCID, raw), testPieceCID, raw)
+		if err != nil {
+			t.Fatalf("expected replay accepted in paid window, got %v", err)
+		}
+		if first.TxHash == "" || replay.TxHash != first.TxHash {
+			t.Fatalf("expected replay tx hash reuse, first=%q replay=%q", first.TxHash, replay.TxHash)
 		}
 	})
 

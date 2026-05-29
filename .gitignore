@@ -14,6 +14,7 @@ vendor/
 *.db
 *.key
 *.car
+*.partial
 
 # IDE
 .idea/

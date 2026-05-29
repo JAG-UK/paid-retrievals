@@ -43,7 +43,7 @@ func TestDownloadHeadersReplacesWaitingSpinner(t *testing.T) {
 	var buf bytes.Buffer
 	ui := &lineProgress{out: &buf, dlTotal: -1}
 	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
-	ui.DownloadStart(cid, "http://127.0.0.1/piece", -1)
+	ui.DownloadStart(cid, "http://127.0.0.1/piece", -1, true, 0)
 	time.Sleep(50 * time.Millisecond)
 	ui.DownloadHeaders(cid, 32<<30)
 	time.Sleep(150 * time.Millisecond)
@@ -64,7 +64,7 @@ func TestLineProgressPaidDownloadUnknownTotal(t *testing.T) {
 	var buf bytes.Buffer
 	ui := &lineProgress{out: &buf, dlTotal: -1}
 	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
-	ui.DownloadStart(cid, "http://127.0.0.1/piece", -1)
+	ui.DownloadStart(cid, "http://127.0.0.1/piece", -1, true, 0)
 	ui.DownloadHeaders(cid, -1)
 	ui.DownloadProgress(cid, 4096, -1)
 	time.Sleep(80 * time.Millisecond)
@@ -82,48 +82,17 @@ func TestLineProgressDownloadFailed(t *testing.T) {
 	var buf bytes.Buffer
 	ui := &lineProgress{out: &buf, dlTotal: -1}
 	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
-	ui.DownloadStart(cid, "http://127.0.0.1/piece", -1)
+	ui.DownloadStart(cid, "http://127.0.0.1/piece", -1, true, 0)
 	ui.DownloadFailed(cid)
 	if strings.Contains(buf.String(), "waiting for SP") && !strings.Contains(buf.String(), "\033[2K") {
 		t.Fatalf("failed download should clear spinner line: %q", buf.String())
 	}
 }
 
-func TestLineProgressDownloadIncompleteStopsSpinner(t *testing.T) {
-	var buf bytes.Buffer
-	ui := &lineProgress{out: &buf, dlTotal: -1}
-	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
-	ui.DownloadStart(cid, "http://127.0.0.1/piece", 1024)
-	time.Sleep(80 * time.Millisecond)
-	ui.DownloadHeaders(cid, 1024)
-	ui.DownloadProgress(cid, 10, 1024)
-	time.Sleep(80 * time.Millisecond)
-	ui.DownloadIncomplete(cid, 10, 1024)
-	time.Sleep(150 * time.Millisecond)
-
-	out := buf.String()
-	if !strings.Contains(out, "\033[2K") {
-		t.Fatal("expected spinner line clear")
-	}
-	if !strings.Contains(out, "WARNING") || !strings.Contains(out, "short read") || !strings.Contains(out, "skipping file") {
-		t.Fatalf("missing warning line:\n%s", out)
-	}
-	warnIdx := strings.LastIndex(out, "WARNING")
-	if warnIdx < 0 {
-		t.Fatal("warning index")
-	}
-	tail := out[warnIdx:]
-	for _, frame := range spinnerFrames {
-		if strings.Contains(tail, frame) {
-			t.Fatalf("spinner still drawing after incomplete warning:\n%s", tail)
-		}
-	}
-}
-
 func TestLineProgressDownloadSpinner(t *testing.T) {
 	var buf bytes.Buffer
 	ui := &lineProgress{out: &buf, dlTotal: -1}
-	ui.DownloadStart("bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e", "http://127.0.0.1/piece", -1)
+	ui.DownloadStart("bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e", "http://127.0.0.1/piece", -1, true, 0)
 	ui.DownloadHeaders("bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e", 32<<30)
 	ui.DownloadProgress("bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e", 1<<30, 32<<30)
 	time.Sleep(120 * time.Millisecond)
@@ -167,29 +136,37 @@ func TestFormatProbeProgress(t *testing.T) {
 
 func TestFormatDownloadProgress(t *testing.T) {
 	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
-	got := formatDownloadProgress(cid, 5<<20, 32<<30, false)
+	got := formatDownloadProgress(cid, 5<<20, 32<<30, false, true, 0)
 	if !strings.Contains(got, "5.0 MiB") || !strings.Contains(got, "32.0 GiB") || !strings.Contains(got, "%") {
 		t.Fatalf("got %q", got)
 	}
-	got = formatDownloadProgress(cid, 0, 32<<30, false)
+	got = formatDownloadProgress(cid, 0, 32<<30, false, true, 0)
 	if !strings.Contains(got, "0 B") || !strings.Contains(got, "32.0 GiB") {
 		t.Fatalf("got %q", got)
 	}
-	got = formatDownloadProgress(cid, 1024, -1, false)
+	got = formatDownloadProgress(cid, 1024, -1, false, true, 0)
 	if !strings.Contains(got, "1.0 KiB received") {
 		t.Fatalf("got %q", got)
 	}
-	got = formatDownloadProgress(cid, 0, 0, false)
+	got = formatDownloadProgress(cid, 0, 0, false, true, 0)
 	if !strings.Contains(got, "0 B / 0 B") {
 		t.Fatalf("got %q", got)
 	}
-	got = formatDownloadProgress(cid, 0, -1, true)
+	got = formatDownloadProgress(cid, 0, -1, true, true, 0)
 	if !strings.Contains(got, "waiting for SP") {
 		t.Fatalf("got %q", got)
 	}
-	got = formatDownloadProgress(cid, 0, 32<<30, true)
+	got = formatDownloadProgress(cid, 0, 32<<30, true, true, 0)
 	if !strings.Contains(got, "0 B") || !strings.Contains(got, "32.0 GiB") || !strings.Contains(got, "waiting for SP") {
 		t.Fatalf("probe total while waiting: %q", got)
+	}
+	got = formatDownloadProgress(cid, 0, 32<<30, true, false, 0)
+	if strings.Contains(got, "waiting for SP") {
+		t.Fatalf("free downloads should not show settlement wait text: %q", got)
+	}
+	got = formatDownloadProgress(cid, 0, -1, true, false, 0)
+	if strings.Contains(got, "waiting for SP") || !strings.Contains(got, "waiting for response") {
+		t.Fatalf("free unknown total should show generic response wait: %q", got)
 	}
 }
 
@@ -198,7 +175,7 @@ func TestDownloadStartShowsProbeTotalWhileWaiting(t *testing.T) {
 	ui := &lineProgress{out: &buf, dlTotal: -1}
 	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
 	const probeTotal = 8 << 30
-	ui.DownloadStart(cid, "http://127.0.0.1/piece", probeTotal)
+	ui.DownloadStart(cid, "http://127.0.0.1/piece", probeTotal, true, 0)
 	time.Sleep(120 * time.Millisecond)
 
 	last := lastSpinnerRedraw(buf.String())
@@ -207,6 +184,36 @@ func TestDownloadStartShowsProbeTotalWhileWaiting(t *testing.T) {
 	}
 	if strings.Contains(last, "received") {
 		t.Fatalf("should not show indeterminate progress: %q", last)
+	}
+}
+
+func TestFormatDownloadProgressIncludesRetryCount(t *testing.T) {
+	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
+	got := formatDownloadProgress(cid, 0, 32<<30, true, true, 2)
+	if !strings.Contains(got, "[retry 2]") {
+		t.Fatalf("missing retry count: %q", got)
+	}
+}
+
+func TestDownloadAttemptUpdatesSpinnerWithoutNewDownloadLine(t *testing.T) {
+	var buf bytes.Buffer
+	ui := &lineProgress{out: &buf, dlTotal: -1}
+	const cid = "bafkreidcbkgxoddug6vawnjrzb4aaublfn46sd2rvxnykbxkkarke7y76e"
+	ui.DownloadStart(cid, "http://127.0.0.1/piece", 8<<30, true, 0)
+	time.Sleep(80 * time.Millisecond)
+	ui.DownloadAttempt(8<<30, 2)
+	time.Sleep(80 * time.Millisecond)
+	ui.DownloadDone(cid, "/out/piece.car")
+
+	out := buf.String()
+	if strings.Count(out, "→ downloading ") != 1 {
+		t.Fatalf("expected one download banner, got:\n%s", out)
+	}
+	if !strings.Contains(out, "[retry 2]") {
+		t.Fatalf("expected retry count in spinner output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "stored /out/piece.car (after 2 retries)") {
+		t.Fatalf("expected retry count in stored line, got:\n%s", out)
 	}
 }
 
