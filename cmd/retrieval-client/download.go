@@ -18,7 +18,7 @@ import (
 var (
 	downloadMaxAttempts   = 100
 	downloadRetryDelay    = 500 * time.Millisecond
-	downloadMaxRetrySleep = 30 * time.Minute
+	downloadMaxRetrySleep = 30 * time.Second
 )
 
 type retryableDownloadError struct {
