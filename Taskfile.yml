@@ -62,6 +62,7 @@ tasks:
     desc: Fetch two discovered CIDs from public provider API
     deps:
       - build
+      - tools
     cmds:
       - |
         set -euo pipefail
@@ -211,7 +212,7 @@ tasks:
 
   nginx:piece:
     internal: true
-    desc: Start stock nginx serving an 32 GiB sparse dummy file under /piece/<cid>
+    desc: Start stock nginx serving a 32 GiB sparse dummy file under /piece/<cid>
     cmds:
       - mkdir -p .task/nginx-piece/piece
       - truncate -s 32G .task/nginx-piece/piece/data.car
@@ -234,7 +235,7 @@ tasks:
           -v "{{.TASKFILE_DIR}}/.task/nginx-piece/piece:/usr/share/nginx/html/piece:ro" \
           -v "{{.TASKFILE_DIR}}/.task/nginx-piece/default.conf:/etc/nginx/conf.d/default.conf:ro" \
           nginx:stable-alpine
-      - echo "nginx started at http://127.0.0.1:8788/piece/<cid> (8 GiB sparse zeros, Content-Length 8589934592)"
+      - echo "nginx started at http://127.0.0.1:8788/piece/<cid> (32 GiB sparse zeros, Content-Length 34359738368)"
 
   nginx:piece:clean:
     internal: true
@@ -315,7 +316,7 @@ tasks:
           --add-host=host.docker.internal:host-gateway \
           -v "{{.TASKFILE_DIR}}/.task/envoy-piece/envoy.yaml:/etc/envoy/envoy.yaml:ro" \
           envoyproxy/envoy:v1.31-latest
-      - echo "envoy started at http://127.0.0.1:8789/piece/<cid> (proxied to nginx:8788, max stream 10s)"
+      - echo "envoy started at http://127.0.0.1:8789/piece/<cid> (proxied to nginx:8788, max stream 3s)"
 
   envoy:piece:clean:
     internal: true
