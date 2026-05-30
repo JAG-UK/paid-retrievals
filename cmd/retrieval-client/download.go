@@ -75,10 +75,6 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, client0x, auth
 			fmt.Fprintf(os.Stderr, "warning: retrying GET %s (%d/%d): %v\n", shortCID(cid), attempt, downloadMaxAttempts, lastErr)
 		}
 		attemptReq := req.Clone(req.Context())
-		// Be explicit per attempt in case intermediaries/request cloning behavior changes.
-		if authorization != "" {
-			attemptReq.Header.Set("Authorization", authorization)
-		}
 		if resumeFrom > 0 {
 			attemptReq.Header.Set("Range", fmt.Sprintf("bytes=%d-", resumeFrom))
 			if verbose {
