@@ -218,7 +218,6 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 	return nil
 }
 
-// getShortOfExpectedSize reports whether the GET body ended before probe HEAD size.
 func contentRangeStart(header string) (int64, bool) {
 	header = strings.TrimSpace(header)
 	if !strings.HasPrefix(header, "bytes ") {
@@ -236,6 +235,7 @@ func contentRangeStart(header string) (int64, bool) {
 	return start, true
 }
 
+// getShortOfExpectedSize reports whether the GET body ended before probe HEAD size.
 func getShortOfExpectedSize(getWritten, probeHEADBytes int64) bool {
 	return probeHEADBytes >= 0 && getWritten < probeHEADBytes
 }
