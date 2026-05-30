@@ -242,6 +242,52 @@ func TestDownloadCARRetriesWithRangeResume(t *testing.T) {
 	}
 }
 
+func TestDownloadCARContentRangeMismatchRestartsFromZero(t *testing.T) {
+	const cid = "bafyRangeMismatch"
+	full := []byte("CAR-DATA-HERE")
+	var hits int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&hits, 1)
+		switch n {
+		case 1:
+			w.Header().Set("Content-Length", "13")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(full[:3])
+		case 2:
+			if got := r.Header.Get("Range"); got != "bytes=3-" {
+				t.Fatalf("second attempt range=%q", got)
+			}
+			// Mismatched Content-Range: claims to start at 0 while body is the full object.
+			w.Header().Set("Content-Length", "13")
+			w.Header().Set("Content-Range", "bytes 0-12/13")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(full)
+		default:
+			t.Fatalf("unexpected extra attempt %d", n)
+		}
+	}))
+	defer ts.Close()
+
+	base, err := url.Parse(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outDir := t.TempDir()
+	if err := downloadCAR(http.DefaultClient, base, cid, "/piece/"+cid, "", "", outDir, int64(len(full)), noopProgress{}, false); err != nil {
+		t.Fatalf("download failed: %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Fatalf("hits=%d want 2", got)
+	}
+	got, err := os.ReadFile(filepath.Join(outDir, sanitizeFilename(cid)+".car"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(full) {
+		t.Fatalf("body %q", got)
+	}
+}
+
 func TestDownloadCARPlainErrorBody(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

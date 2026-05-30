@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -146,6 +147,28 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 
 	outPath := filepath.Join(outDir, sanitizeFilename(cid)+".car")
 	partialPath := outPath + ".partial"
+
+	openFlags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if resumeFrom > 0 && res.StatusCode == http.StatusPartialContent {
+		rangeStart, ok := contentRangeStart(res.Header.Get("Content-Range"))
+		if !ok || rangeStart != resumeFrom {
+			if verbose {
+				payClientLog("GET %s Content-Range mismatch (want start=%d, got %q); restarting from 0", shortCID(cid), resumeFrom, res.Header.Get("Content-Range"))
+			}
+			resumeFrom = 0
+		} else {
+			if verbose {
+				payClientLog("GET %s resumed at %s (206 Partial Content)", shortCID(cid), formatBytes(resumeFrom))
+			}
+			openFlags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+		}
+	} else if resumeFrom > 0 && res.StatusCode == http.StatusOK {
+		// Upstream ignored Range; restart from scratch on this attempt.
+		if verbose {
+			payClientLog("GET %s ignored Range; restarting from 0 (200 OK)", shortCID(cid))
+		}
+		resumeFrom = 0
+	}
 	total := expectedTotal
 	if respTotal := pieceurls.ResponseTotalBytes(res); respTotal >= 0 {
 		if resumeFrom > 0 && res.StatusCode == http.StatusPartialContent {
@@ -153,20 +176,6 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 		} else {
 			total = respTotal
 		}
-	}
-
-	openFlags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-	if resumeFrom > 0 && res.StatusCode == http.StatusPartialContent {
-		if verbose {
-			payClientLog("GET %s resumed at %s (206 Partial Content)", shortCID(cid), formatBytes(resumeFrom))
-		}
-		openFlags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
-	} else if resumeFrom > 0 && res.StatusCode == http.StatusOK {
-		// Upstream ignored Range; restart from scratch on this attempt.
-		if verbose {
-			payClientLog("GET %s ignored Range; restarting from 0 (200 OK)", shortCID(cid))
-		}
-		resumeFrom = 0
 	}
 	if ui.Enabled() {
 		ui.DownloadHeaders(cid, total)
@@ -210,6 +219,23 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 }
 
 // getShortOfExpectedSize reports whether the GET body ended before probe HEAD size.
+func contentRangeStart(header string) (int64, bool) {
+	header = strings.TrimSpace(header)
+	if !strings.HasPrefix(header, "bytes ") {
+		return 0, false
+	}
+	rest := strings.TrimPrefix(header, "bytes ")
+	dash := strings.Index(rest, "-")
+	if dash <= 0 {
+		return 0, false
+	}
+	start, err := strconv.ParseInt(rest[:dash], 10, 64)
+	if err != nil || start < 0 {
+		return 0, false
+	}
+	return start, true
+}
+
 func getShortOfExpectedSize(getWritten, probeHEADBytes int64) bool {
 	return probeHEADBytes >= 0 && getWritten < probeHEADBytes
 }
