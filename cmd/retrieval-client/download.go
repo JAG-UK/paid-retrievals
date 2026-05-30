@@ -153,15 +153,18 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 		rangeStart, ok := contentRangeStart(res.Header.Get("Content-Range"))
 		if !ok || rangeStart != resumeFrom {
 			if verbose {
-				payClientLog("GET %s Content-Range mismatch (want start=%d, got %q); restarting from 0", shortCID(cid), resumeFrom, res.Header.Get("Content-Range"))
+				payClientLog("GET %s Content-Range mismatch (want start=%d, got %q); retrying from 0", shortCID(cid), resumeFrom, res.Header.Get("Content-Range"))
 			}
-			resumeFrom = 0
-		} else {
-			if verbose {
-				payClientLog("GET %s resumed at %s (206 Partial Content)", shortCID(cid), formatBytes(resumeFrom))
+			_, _ = io.Copy(io.Discard, res.Body)
+			return &retryableDownloadError{
+				err:         fmt.Errorf("download %s: invalid Content-Range for resume at %s", cid, formatBytes(resumeFrom)),
+				writtenByte: 0,
 			}
-			openFlags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
 		}
+		if verbose {
+			payClientLog("GET %s resumed at %s (206 Partial Content)", shortCID(cid), formatBytes(resumeFrom))
+		}
+		openFlags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
 	} else if resumeFrom > 0 && res.StatusCode == http.StatusOK {
 		// Upstream ignored Range; restart from scratch on this attempt.
 		if verbose {
