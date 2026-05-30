@@ -140,7 +140,7 @@ func TestGetShortOfExpectedSize(t *testing.T) {
 	}
 }
 
-func TestDownloadCARWarnsWhenGETShortOfProbeHEAD(t *testing.T) {
+func TestDownloadCARRetriesWhenGETShortOfProbeHEAD(t *testing.T) {
 	withDownloadRetryConfig(t, 3, 1*time.Millisecond)
 
 	const cid = "bafyIncomplete"

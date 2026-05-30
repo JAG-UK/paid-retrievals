@@ -111,7 +111,9 @@ func (s *Store) IsDealPaidSince(ctx context.Context, dealUUID, client, cid strin
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(1)
 		FROM deals
-		WHERE deal_uuid = ? AND client = ? AND cid = ? AND last_paid_at IS NOT NULL AND last_paid_at >= ?
+		WHERE deal_uuid = ? AND client = ? AND cid = ?
+			AND last_paid_at IS NOT NULL AND last_paid_at >= ?
+			AND last_paid_tx_hash != ''
 	`, dealUUID, client, cid, sinceUnix).Scan(&n)
 	if err != nil {
 		return false, err

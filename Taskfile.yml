@@ -97,6 +97,10 @@ tasks:
       - |
         set -euo pipefail
         sp_proxy_port=8787
+        command -v lsof >/dev/null 2>&1 || {
+          echo "lsof is required for sp-proxy cleanup in test:e2e:filpay" >&2
+          exit 1
+        }
         mkdir -p .task
         rm -f .task/sp-proxy-test.log
         ./bin/sp-proxy \

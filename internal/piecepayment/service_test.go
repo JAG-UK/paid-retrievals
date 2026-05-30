@@ -95,6 +95,9 @@ func (m *mockDealStore) IsDealPaidSince(_ context.Context, dealUUID, client, cid
 	if d.Client != client || d.CID != cid {
 		return false, nil
 	}
+	if strings.TrimSpace(d.LastPaidTxHash) == "" {
+		return false, nil
+	}
 	return m.lastPaidAt[dealUUID] >= sinceUnix, nil
 }
 

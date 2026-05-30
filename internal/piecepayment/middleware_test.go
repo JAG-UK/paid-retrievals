@@ -169,7 +169,7 @@ func (s *expiredPaidDealStore) IsDealPaidSince(_ context.Context, dealUUID, clie
 	if d.Client != client || d.CID != cid {
 		return false, nil
 	}
-	return s.paidAt[dealUUID] >= sinceUnix, nil
+	return s.paidAt[dealUUID] >= sinceUnix && strings.TrimSpace(d.LastPaidTxHash) != "", nil
 }
 
 func (s *expiredPaidDealStore) ConsumeNonce(_ context.Context, dealUUID, nonce string, _ int64) error {
