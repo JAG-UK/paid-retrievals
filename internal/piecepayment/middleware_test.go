@@ -161,15 +161,6 @@ func (s *expiredPaidDealStore) GetDeal(_ context.Context, dealUUID string) (*pp.
 	return d, nil
 }
 
-func (s *expiredPaidDealStore) FindPaidDeal(_ context.Context, client, cid string, sinceUnix int64) (*pp.Deal, error) {
-	for id, d := range s.deals {
-		if d.Client == client && d.CID == cid && s.paidAt[id] >= sinceUnix {
-			return d, nil
-		}
-	}
-	return nil, pp.ErrDealNotFound
-}
-
 func (s *expiredPaidDealStore) IsDealPaidSince(_ context.Context, dealUUID, client, cid string, sinceUnix int64) (bool, error) {
 	d, ok := s.deals[dealUUID]
 	if !ok {

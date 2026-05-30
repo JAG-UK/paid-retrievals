@@ -106,26 +106,6 @@ func (s *Store) GetDeal(ctx context.Context, dealUUID string) (*piecepayment.Dea
 	return &d, nil
 }
 
-func (s *Store) FindPaidDeal(ctx context.Context, client, cid string, sinceUnix int64) (*piecepayment.Deal, error) {
-	var d piecepayment.Deal
-	err := s.db.QueryRowContext(ctx, `
-		SELECT deal_uuid, client, cid, price_usdfc, COALESCE(payee_0x, ''), COALESCE(last_paid_tx_hash, '')
-		FROM deals
-		WHERE client = ? AND cid = ? AND last_paid_at IS NOT NULL AND last_paid_at >= ?
-		ORDER BY last_paid_at DESC
-		LIMIT 1
-	`, client, cid, sinceUnix).Scan(
-		&d.DealUUID, &d.Client, &d.CID, &d.PriceUSDFC, &d.Payee0x, &d.LastPaidTxHash,
-	)
-	if err == sql.ErrNoRows {
-		return nil, piecepayment.ErrDealNotFound
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &d, nil
-}
-
 func (s *Store) IsDealPaidSince(ctx context.Context, dealUUID, client, cid string, sinceUnix int64) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `

@@ -84,20 +84,6 @@ func (m *mockDealStore) MarkPaid(_ context.Context, dealUUID, txHash string) err
 	return m.markPaidErr
 }
 
-func (m *mockDealStore) FindPaidDeal(_ context.Context, client, cid string, sinceUnix int64) (*Deal, error) {
-	for dealUUID, d := range m.deals {
-		if strings.Contains(dealUUID, ":") { // skip nonce sentinel keys
-			continue
-		}
-		if d.Client == client && d.CID == cid {
-			if m.lastPaidAt != nil && m.lastPaidAt[dealUUID] >= sinceUnix {
-				return d, nil
-			}
-		}
-	}
-	return nil, ErrDealNotFound
-}
-
 func (m *mockDealStore) IsDealPaidSince(_ context.Context, dealUUID, client, cid string, sinceUnix int64) (bool, error) {
 	if m.lastPaidAt == nil {
 		return false, nil

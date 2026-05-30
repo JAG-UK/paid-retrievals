@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	downloadMaxAttempts = 100
-	downloadRetryDelay  = 500 * time.Millisecond
+	downloadMaxAttempts   = 100
+	downloadRetryDelay    = 500 * time.Millisecond
+	downloadMaxRetrySleep = 30 * time.Minute
 )
 
 type retryableDownloadError struct {
@@ -56,6 +57,7 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, client0x, auth
 	paid := authorization != ""
 	var resumeFrom int64
 	var lastErr error
+	var retrySleep time.Duration
 	if ui.Enabled() {
 		ui.DownloadStart(cid, fullURL, expectedTotal, paid, 0)
 	}
@@ -88,7 +90,12 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, client0x, auth
 		if !isRetryableDownloadError(lastErr) || attempt == downloadMaxAttempts {
 			break
 		}
-		time.Sleep(downloadRetryDelay * time.Duration(attempt))
+		delay := downloadRetryDelay * time.Duration(attempt)
+		if retrySleep+delay > downloadMaxRetrySleep {
+			break
+		}
+		time.Sleep(delay)
+		retrySleep += delay
 	}
 	if ui.Enabled() {
 		ui.DownloadFailed(cid)

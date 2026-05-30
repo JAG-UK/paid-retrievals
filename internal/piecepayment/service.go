@@ -38,7 +38,6 @@ type Deal struct {
 type DealStore interface {
 	InsertQuote(ctx context.Context, dealUUID, client, cid, priceUSDFC, payee0x string) error
 	GetDeal(ctx context.Context, dealUUID string) (*Deal, error)
-	FindPaidDeal(ctx context.Context, client, cid string, sinceUnix int64) (*Deal, error)
 	IsDealPaidSince(ctx context.Context, dealUUID, client, cid string, sinceUnix int64) (bool, error)
 	ConsumeNonce(ctx context.Context, dealUUID, nonce string, expiresUnix int64) error
 	MarkPaid(ctx context.Context, dealUUID, txHash string) error
@@ -200,22 +199,6 @@ func (s *RetrievalService) AuthorizeAndSettle(r *http.Request, cid, rawHdr strin
 	}
 	s.logger.Info("paid retrieval authorized", "deal_uuid", deal.DealUUID, "client", deal.Client, "cid", cid)
 	return &PaidOutcome{Deal: deal, CID: cid, TxHash: txHash}, nil
-}
-
-func (s *RetrievalService) FindRecentPaidDeal(r *http.Request, cid string) (*Deal, error) {
-	client := identifyClient(r, s.cfg.ClientQuery, s.cfg.ClientHeader)
-	if !common.IsHexAddress(strings.TrimSpace(client)) {
-		return nil, nil
-	}
-	since := time.Now().Add(-paidAccessTTL).Unix()
-	deal, err := s.cfg.Store.FindPaidDeal(r.Context(), client, cid, since)
-	if err != nil {
-		if errors.Is(err, ErrDealNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return deal, nil
 }
 
 func issueChallengeForDeal(w http.ResponseWriter, r *http.Request, deal *Deal, logger *slog.Logger) {
