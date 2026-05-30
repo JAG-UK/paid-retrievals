@@ -41,9 +41,9 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, client0x, auth
 	fullURL := u.String()
 	if verbose {
 		if authorization != "" {
-			payClientLog("paid GET %s (Authorization: Payment len=%d)", fullURL, len(authorization))
+			retrievalLog("paid GET %s (Authorization: Payment len=%d)", fullURL, len(authorization))
 		} else {
-			payClientLog("free GET %s", fullURL)
+			retrievalLog("free GET %s", fullURL)
 		}
 	}
 	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
@@ -78,7 +78,7 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, client0x, auth
 		if resumeFrom > 0 {
 			attemptReq.Header.Set("Range", fmt.Sprintf("bytes=%d-", resumeFrom))
 			if verbose {
-				payClientLog("GET %s retry with Range: bytes=%d-", shortCID(cid), resumeFrom)
+				retrievalLog("GET %s retry with Range: bytes=%d-", shortCID(cid), resumeFrom)
 			}
 		}
 		lastErr = downloadCAROnce(cli, attemptReq, cid, outDir, expectedTotal, resumeFrom, ui, verbose)
@@ -112,12 +112,12 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 	}
 	defer res.Body.Close()
 	if verbose {
-		payClientLog("GET response status=%d for cid=%s", res.StatusCode, cid)
+		retrievalLog("GET response status=%d for cid=%s", res.StatusCode, cid)
 	}
 	if resumeFrom > 0 && res.StatusCode != http.StatusPartialContent && res.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		if verbose {
-			payClientLog("GET error body (truncated): %s", truncateForLog(string(b), 512))
+			retrievalLog("GET error body (truncated): %s", truncateForLog(string(b), 512))
 		}
 		if res.StatusCode == http.StatusRequestedRangeNotSatisfiable {
 			return fmt.Errorf("download %s failed: %s (range resume from %s)", cid, res.Status, formatBytes(resumeFrom))
@@ -127,7 +127,7 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 	if resumeFrom == 0 && res.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		if verbose {
-			payClientLog("GET error body (truncated): %s", truncateForLog(string(b), 512))
+			retrievalLog("GET error body (truncated): %s", truncateForLog(string(b), 512))
 		}
 		trimmed := strings.TrimSpace(string(b))
 		var pd problemDetails
@@ -153,22 +153,22 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 		rangeStart, ok := contentRangeStart(res.Header.Get("Content-Range"))
 		if !ok || rangeStart != resumeFrom {
 			if verbose {
-				payClientLog("GET %s Content-Range mismatch (want start=%d, got %q); retrying from 0", shortCID(cid), resumeFrom, res.Header.Get("Content-Range"))
+				retrievalLog("GET %s Content-Range mismatch (want start=%d, got %q); retrying from 0", shortCID(cid), resumeFrom, res.Header.Get("Content-Range"))
 			}
-			_, _ = io.Copy(io.Discard, res.Body)
+			_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
 			return &retryableDownloadError{
 				err:         fmt.Errorf("download %s: invalid Content-Range for resume at %s", cid, formatBytes(resumeFrom)),
 				writtenByte: 0,
 			}
 		}
 		if verbose {
-			payClientLog("GET %s resumed at %s (206 Partial Content)", shortCID(cid), formatBytes(resumeFrom))
+			retrievalLog("GET %s resumed at %s (206 Partial Content)", shortCID(cid), formatBytes(resumeFrom))
 		}
 		openFlags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
 	} else if resumeFrom > 0 && res.StatusCode == http.StatusOK {
 		// Upstream ignored Range; restart from scratch on this attempt.
 		if verbose {
-			payClientLog("GET %s ignored Range; restarting from 0 (200 OK)", shortCID(cid))
+			retrievalLog("GET %s ignored Range; restarting from 0 (200 OK)", shortCID(cid))
 		}
 		resumeFrom = 0
 	}

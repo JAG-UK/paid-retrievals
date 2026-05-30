@@ -420,8 +420,8 @@ func cmdFetch(keyOpts *filpayKeyOpts) *cobra.Command {
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "Probe and print quote only; no chain transactions or downloads")
 	c.Flags().BoolVar(&noProgress, "no-progress", false, "Disable progress output (default: on when stderr is a terminal)")
 	c.Flags().IntVar(&expiresIn, "expires-in-sec", 120, "Header expiry interval in seconds")
-	c.Flags().BoolVar(&verbose, "verbose", false, "Print detailed per-step progress output")
-	c.Flags().BoolVar(&payDebug, "pay-debug", false, "Log Filecoin Pay operation steps to stderr ([filpay-client]); probe/download logs are controlled by --verbose")
+	c.Flags().BoolVar(&verbose, "verbose", false, "Print detailed probe/download progress (stdout) and retrieval step logs to stderr ([retrieval-client])")
+	c.Flags().BoolVar(&payDebug, "pay-debug", false, "Log Filecoin Pay chain operations to stderr ([filpay-client])")
 	c.Flags().StringVar(&payRPCURL, "pay-rpc-url", getenv("SP_PROXY_PAY_RPC_URL", "https://api.calibration.node.glif.io/rpc/v1"), "Filecoin JSON-RPC URL: FVM payments + Lotus StateMinerInfo for discovery")
 	c.Flags().StringVar(&payPaymentsAddress, "pay-payments-address", getenv("SP_PROXY_PAY_PAYMENTS_ADDRESS", ""), "Filecoin Pay payments contract (0x); empty uses chain default")
 	return c
@@ -490,7 +490,7 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 				}
 				probeLog := func(format string, args ...any) {
 					if payDebug {
-						payClientLog(format, args...)
+						retrievalLog(format, args...)
 					}
 				}
 				spOverride := strings.TrimSpace(spBaseURL)
@@ -661,6 +661,10 @@ func cmdRailCheck(keyOpts *filpayKeyOpts) *cobra.Command {
 
 func payClientLog(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "[filpay-client] "+format+"\n", args...)
+}
+
+func retrievalLog(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "[retrieval-client] "+format+"\n", args...)
 }
 
 func truncateForLog(s string, max int) string {
