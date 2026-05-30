@@ -41,6 +41,10 @@ func TestDownloadCARSuccess(t *testing.T) {
 	const cid = "bafyDownloadOk"
 	body := []byte("CAR-DATA-HERE")
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept-Encoding") != "identity" {
+			http.Error(w, "expected identity encoding", http.StatusBadRequest)
+			return
+		}
 		if r.Header.Get("Authorization") != "Payment test" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

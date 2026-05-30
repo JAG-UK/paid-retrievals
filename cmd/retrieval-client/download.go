@@ -50,6 +50,10 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, client0x, auth
 	if err != nil {
 		return err
 	}
+	// When using Range retries, Go’s http.Transport can transparently request and decompress gzip unless Accept-Encoding is explicitly set.
+	// If an upstream ever applies Content-Encoding: gzip, the byte offsets used for Range/resumeFrom will no longer match the on-disk bytes
+	// and the resumed CAR can be corrupted. Setting Accept-Encoding: identity makes the response bytes stable for resumable downloads.
+	req.Header.Set("Accept-Encoding", "identity")
 	if authorization != "" {
 		req.Header.Set("Authorization", authorization)
 	}
