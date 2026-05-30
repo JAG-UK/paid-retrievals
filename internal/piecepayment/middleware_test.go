@@ -517,13 +517,13 @@ func TestBadClientAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusPaymentRequired {
+	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status %d", res.StatusCode)
 	}
-	if !strings.Contains(res.Header.Get("WWW-Authenticate"), "Payment") {
-		t.Fatal("missing payment challenge header")
+	if wa := res.Header.Get("WWW-Authenticate"); wa != "" {
+		t.Fatalf("unexpected WWW-Authenticate: %q", wa)
 	}
-	if mustProblemType(t, res) != "https://paymentauth.org/problems/payment-required" {
+	if mustProblemType(t, res) != "https://paymentauth.org/problems/bad-request" {
 		t.Fatal("problem type")
 	}
 }

@@ -67,7 +67,7 @@ func (svc *RetrievalService) PiecePaymentMiddleware(MaxHeaderSize int) func(http
 				outcome, err := svc.IssueQuote(r, cid)
 				if err != nil {
 					if badReq, ok := errors.AsType[*BadRequestError](err); ok {
-						failPaymentRequired(w, r, nil, logger, "payment-required", badReq.Message)
+						writeProblem(w, http.StatusBadRequest, "bad-request", badReq.Message)
 						return
 					}
 					http.Error(w, "internal error", http.StatusInternalServerError)
