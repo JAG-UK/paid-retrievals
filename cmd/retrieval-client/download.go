@@ -17,9 +17,8 @@ import (
 )
 
 var (
-	downloadMaxAttempts   = 100
-	downloadRetryDelay    = 500 * time.Millisecond
-	downloadMaxRetrySleep = 30 * time.Second
+	downloadMaxAttempts = 100
+	downloadRetryDelay  = 500 * time.Millisecond
 )
 
 type retryableDownloadError struct {
@@ -62,7 +61,6 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, client0x, auth
 	paid := authorization != ""
 	var resumeFrom int64
 	var lastErr error
-	var retrySleep time.Duration
 	if ui.Enabled() {
 		ui.DownloadStart(cid, fullURL, expectedTotal, paid, 0)
 	}
@@ -91,12 +89,8 @@ func downloadCAR(cli *http.Client, base *url.URL, cid, piecePath, client0x, auth
 		if !isRetryableDownloadError(lastErr) || attempt == downloadMaxAttempts {
 			break
 		}
-		delay := downloadRetryDelay * time.Duration(attempt)
-		if retrySleep+delay > downloadMaxRetrySleep {
-			break
-		}
+		delay := downloadRetryDelay
 		time.Sleep(delay)
-		retrySleep += delay
 	}
 	if ui.Enabled() {
 		ui.DownloadFailed(cid)
@@ -164,7 +158,17 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 		if verbose {
 			retrievalLog("GET %s resumed at %s (206 Partial Content)", shortCID(cid), formatBytes(resumeFrom))
 		}
-		openFlags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+		partialSize, err := partialFileSize(partialPath)
+		if err != nil || partialSize != resumeFrom {
+			if verbose {
+				retrievalLog("GET %s partial file size mismatch (want %s, got %s); retrying from 0", shortCID(cid), formatBytes(resumeFrom), formatBytes(partialSize))
+			}
+			return &retryableDownloadError{
+				err:         fmt.Errorf("download %s: partial file size mismatch for resume at %s", cid, formatBytes(resumeFrom)),
+				writtenByte: 0,
+			}
+		}
+		openFlags = os.O_WRONLY | os.O_APPEND
 	} else if resumeFrom > 0 && res.StatusCode == http.StatusOK {
 		// Upstream ignored Range; restart from scratch on this attempt.
 		if verbose {
@@ -219,6 +223,17 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 		ui.DownloadDone(cid, outPath)
 	}
 	return nil
+}
+
+func partialFileSize(path string) (int64, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	if !fi.Mode().IsRegular() {
+		return 0, fmt.Errorf("partial file is not a regular file")
+	}
+	return fi.Size(), nil
 }
 
 func contentRangeStart(header string) (int64, bool) {
