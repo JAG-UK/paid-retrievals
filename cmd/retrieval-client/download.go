@@ -154,12 +154,6 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 			total = respTotal
 		}
 	}
-	if ui.Enabled() {
-		ui.DownloadHeaders(cid, total)
-		if resumeFrom > 0 {
-			ui.DownloadProgress(cid, resumeFrom, total)
-		}
-	}
 
 	openFlags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 	if resumeFrom > 0 && res.StatusCode == http.StatusPartialContent {
@@ -173,6 +167,12 @@ func downloadCAROnce(cli *http.Client, req *http.Request, cid, outDir string, ex
 			payClientLog("GET %s ignored Range; restarting from 0 (200 OK)", shortCID(cid))
 		}
 		resumeFrom = 0
+	}
+	if ui.Enabled() {
+		ui.DownloadHeaders(cid, total)
+		if resumeFrom > 0 {
+			ui.DownloadProgress(cid, resumeFrom, total)
+		}
 	}
 	f, err := os.OpenFile(partialPath, openFlags, 0o644)
 	if err != nil {
