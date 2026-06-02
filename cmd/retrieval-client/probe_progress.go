@@ -8,23 +8,20 @@ import (
 	"github.com/fidlabs/paid-retrievals/internal/pieceurls"
 )
 
-// makeProbeLog returns a pieceurls probe logger; nil when neither verbose nor --pay-debug.
-func makeProbeLog(stdout io.Writer, verbose, payDebug bool) func(string, ...any) {
-	if !verbose && !payDebug {
+// makeProbeLog returns a pieceurls probe logger for --verbose mode only.
+func makeProbeLog(stdout io.Writer, verbose bool) func(string, ...any) {
+	if !verbose {
 		return nil
 	}
 	return func(format string, args ...any) {
-		if payDebug {
-			payClientLog(format, args...)
-		}
-		if verbose && probeLogToStdout(format) {
+		if probeLogToStdout(format) {
 			fmt.Fprintf(stdout, "    %s\n", fmt.Sprintf(format, args...))
 		}
 	}
 }
 
 func probeLogToStdout(format string) bool {
-	// Keep bulky challenge dumps on stderr (--pay-debug) only.
+	// Keep bulky challenge dumps off verbose output.
 	switch {
 	case strings.HasPrefix(format, "challenge response body"),
 		strings.HasPrefix(format, "challenge response headers"):

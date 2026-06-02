@@ -19,25 +19,28 @@ import (
 
 const (
 	// We have a "human scale" of 10 minutes for the challenge TTL to allow wallet funding and retry.
-	challengeTTL = 10 * time.Minute
+	challengeTTL  = 10 * time.Minute
+	paidAccessTTL = 12 * time.Hour
 )
 
 var ErrDealNotFound = errors.New("deal not found")
 var ErrReplayNonce = errors.New("nonce already used")
 
 type Deal struct {
-	DealUUID   string
-	Client     string
-	CID        string
-	PriceUSDFC string
-	Payee0x    string
+	DealUUID       string
+	Client         string
+	CID            string
+	PriceUSDFC     string
+	Payee0x        string
+	LastPaidTxHash string
 }
 
 type DealStore interface {
 	InsertQuote(ctx context.Context, dealUUID, client, cid, priceUSDFC, payee0x string) error
 	GetDeal(ctx context.Context, dealUUID string) (*Deal, error)
+	IsDealPaidSince(ctx context.Context, dealUUID, client, cid string, sinceUnix int64) (bool, error)
 	ConsumeNonce(ctx context.Context, dealUUID, nonce string, expiresUnix int64) error
-	MarkPaid(ctx context.Context, dealUUID string) error
+	MarkPaid(ctx context.Context, dealUUID, txHash string) error
 }
 
 type FilecoinPaySettler interface {
@@ -165,6 +168,13 @@ func (s *RetrievalService) AuthorizeAndSettle(r *http.Request, cid, rawHdr strin
 	if err := verifier.Verify(hdr.ClientAddress, hdr.CanonicalMessage(), hdr.Signature); err != nil {
 		return nil, &PaymentRequiredError{Deal: deal, Code: "verification-failed", Detail: "Credential signature verification failed"}
 	}
+	since := time.Now().Add(-paidAccessTTL).Unix()
+	if paid, err := s.cfg.Store.IsDealPaidSince(r.Context(), deal.DealUUID, deal.Client, deal.CID, since); err == nil && paid {
+		s.logger.Info("paid retrieval reused", "deal_uuid", deal.DealUUID, "client", deal.Client, "cid", cid)
+		return &PaidOutcome{Deal: deal, CID: cid, TxHash: deal.LastPaidTxHash}, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("check paid window: %w", err)
+	}
 	priceBaseUnits, err := paymentheader.ParseTokenToBaseUnits(deal.PriceUSDFC)
 	if err != nil {
 		return nil, fmt.Errorf("parse price usdfc: %w", err)
@@ -183,7 +193,7 @@ func (s *RetrievalService) AuthorizeAndSettle(r *http.Request, cid, rawHdr strin
 	}
 	s.logger.Info("filecoin pay rail settled", "deal_uuid", deal.DealUUID, "settle_tx", txHash, "payer", payer.Hex(), "payee", payeeAddr.Hex())
 
-	if err := s.cfg.Store.MarkPaid(r.Context(), deal.DealUUID); err != nil {
+	if err := s.cfg.Store.MarkPaid(r.Context(), deal.DealUUID, txHash); err != nil {
 		// We don't return an error here because we want to continue serving the piece even if marking paid fails as payment has been settled.
 		s.logger.Error("failed to mark deal paid", "error", err, "deal_uuid", deal.DealUUID)
 	}

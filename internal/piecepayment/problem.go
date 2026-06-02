@@ -25,6 +25,8 @@ type problemDetail struct {
 func writeProblem(w http.ResponseWriter, status int, code, detail string) {
 	title := "Payment Error"
 	switch code {
+	case "bad-request":
+		title = "Bad Request"
 	case "payment-required":
 		title = "Payment Required"
 	case "payment-insufficient":

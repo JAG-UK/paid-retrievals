@@ -44,6 +44,7 @@ func (s *Store) migrate() error {
 			created_at INTEGER NOT NULL,
 			last_quoted_at INTEGER NOT NULL,
 			last_paid_at INTEGER,
+			last_paid_tx_hash TEXT NOT NULL DEFAULT '',
 			quoted_seen INTEGER NOT NULL DEFAULT 1,
 			paid_seen INTEGER NOT NULL DEFAULT 0
 		);`,
@@ -69,6 +70,13 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
+	// additive column for DBs created before last_paid_tx_hash existed
+	if _, err := s.db.Exec(`ALTER TABLE deals ADD COLUMN last_paid_tx_hash TEXT NOT NULL DEFAULT ''`); err != nil {
+		low := strings.ToLower(err.Error())
+		if !strings.Contains(low, "duplicate column") && !strings.Contains(low, "already exists") {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -84,10 +92,10 @@ func (s *Store) InsertQuote(ctx context.Context, dealUUID, client, cid, priceUSD
 func (s *Store) GetDeal(ctx context.Context, dealUUID string) (*piecepayment.Deal, error) {
 	var d piecepayment.Deal
 	err := s.db.QueryRowContext(ctx, `
-		SELECT deal_uuid, client, cid, price_usdfc, COALESCE(payee_0x, '')
+		SELECT deal_uuid, client, cid, price_usdfc, COALESCE(payee_0x, ''), COALESCE(last_paid_tx_hash, '')
 		FROM deals WHERE deal_uuid = ?
 	`, dealUUID).Scan(
-		&d.DealUUID, &d.Client, &d.CID, &d.PriceUSDFC, &d.Payee0x,
+		&d.DealUUID, &d.Client, &d.CID, &d.PriceUSDFC, &d.Payee0x, &d.LastPaidTxHash,
 	)
 	if err == sql.ErrNoRows {
 		return nil, piecepayment.ErrDealNotFound
@@ -98,13 +106,28 @@ func (s *Store) GetDeal(ctx context.Context, dealUUID string) (*piecepayment.Dea
 	return &d, nil
 }
 
-func (s *Store) MarkPaid(ctx context.Context, dealUUID string) error {
+func (s *Store) IsDealPaidSince(ctx context.Context, dealUUID, client, cid string, sinceUnix int64) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(1)
+		FROM deals
+		WHERE deal_uuid = ? AND client = ? AND cid = ?
+			AND last_paid_at IS NOT NULL AND last_paid_at >= ?
+			AND last_paid_tx_hash != ''
+	`, dealUUID, client, cid, sinceUnix).Scan(&n)
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func (s *Store) MarkPaid(ctx context.Context, dealUUID, txHash string) error {
 	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE deals
-		SET last_paid_at = ?, paid_seen = paid_seen + 1
+		SET last_paid_at = ?, last_paid_tx_hash = ?, paid_seen = paid_seen + 1
 		WHERE deal_uuid = ?
-	`, now, dealUUID)
+	`, now, txHash, dealUUID)
 	if err != nil {
 		return err
 	}

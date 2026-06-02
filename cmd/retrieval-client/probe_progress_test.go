@@ -12,7 +12,7 @@ import (
 
 func TestMakeProbeLogVerbose(t *testing.T) {
 	var buf bytes.Buffer
-	log := makeProbeLog(&buf, true, false)
+	log := makeProbeLog(&buf, true)
 	if log == nil {
 		t.Fatal("expected logger")
 	}
@@ -24,7 +24,7 @@ func TestMakeProbeLogVerbose(t *testing.T) {
 
 func TestMakeProbeLogVerboseSkipsChallengeBody(t *testing.T) {
 	var buf bytes.Buffer
-	log := makeProbeLog(&buf, true, true)
+	log := makeProbeLog(&buf, true)
 	log("challenge response body (truncated): %s", "secret")
 	if strings.Contains(buf.String(), "secret") {
 		t.Fatalf("verbose stdout should not include challenge body: %q", buf.String())
@@ -32,7 +32,7 @@ func TestMakeProbeLogVerboseSkipsChallengeBody(t *testing.T) {
 }
 
 func TestMakeProbeLogDisabled(t *testing.T) {
-	if makeProbeLog(&bytes.Buffer{}, false, false) != nil {
+	if makeProbeLog(&bytes.Buffer{}, false) != nil {
 		t.Fatal("expected nil logger")
 	}
 }
